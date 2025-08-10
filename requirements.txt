@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+python-dotenv
+torch
+torchvision
+numpy
+opencv-python
+Pillow
+face_alignment
+matplotlib
+langchain
+langchain-upstage
+langchain-chroma
+starlette
+ultralytics
+Markdown
