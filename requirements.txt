@@ -3,7 +3,6 @@ uvicorn
 python-dotenv
 torch
 torchvision
-numpy
 opencv-python
 Pillow
 face_alignment
@@ -14,3 +13,4 @@ langchain-chroma
 starlette
 ultralytics
 Markdown
+numpy==1.26.4
