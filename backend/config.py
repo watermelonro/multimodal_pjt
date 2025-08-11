@@ -32,10 +32,12 @@ MODEL_CHECKPOINT_PATH = os.path.join(
     MODELS_DIR, "checkpoints_transformer_fusion", "best.pth"
 )
 
+TEMP_DIR_PATH = os.path.join(PROJECT_ROOT, "temp")
 
 # --- Analysis Parameters ---
 # 클라이언트로부터 수신하는 비디오의 초당 프레임 수 (가정)
 VIDEO_FPS = 15
+TIMESTEP = 10.0
 
 # --- Model Settings ---
 # Solar LLM 모델 이름

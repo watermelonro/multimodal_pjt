@@ -12,6 +12,13 @@ from torchvision import transforms
 from PIL import Image
 import face_alignment
 import warnings
+import logging
+
+# --- 로깅 설정 ---
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 # 워닝 무시 (tqdm 깨짐 방지)
 warnings.filterwarnings("ignore")
@@ -210,7 +217,6 @@ class EndtoEndModel(nn.Module):
 
         return z_visual, z_audio, class_output, [yaw, pitch], audio_class
 
-
 def load_model():
     # L2CS 객체 초기화
     l2cs = l2cs_load()
@@ -303,12 +309,12 @@ def run(face_box, e2e_model, img, aud):
                         cropped_face = resize_cropped_face(img_tensor)
                         cropped_face = cropped_face.cpu()
                 except Exception as e:
-                    print(f"Crop failed for image : {e}")
+                    logger.error(f"Crop failed for image : {e}")
                     cropped_face = resize_cropped_face(img_tensor)  # ← 요기도
                     cropped_face = cropped_face.cpu()
 
             except Exception as e:
-                print(f"YOLO batch prediction error: {e}")
+                logger.error(f"YOLO batch prediction error: {e}")
                 cropped_face = img_tensor.cpu()
 
         # 배치 텐서로 반환 (일관성을 위해)

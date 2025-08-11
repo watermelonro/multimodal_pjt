@@ -27,8 +27,6 @@ class NoiseClassifier(nn.Module):
         self.classifier = nn.Linear(prev_size, num_classes)
 
     def forward(self, x, return_features=True):
-        print(f"🔊 noise_classifier 입력 차원: {x.shape}")
-
         # [1, 1, 96, 64] → [1, 25]로 변환
         if x.dim() == 4:  # [B, C, H, W]
             # Adaptive pooling으로 [96, 64] → [5, 5] → flatten
@@ -36,6 +34,8 @@ class NoiseClassifier(nn.Module):
             x = x.flatten(1)  # [1, 25]
         elif x.dim() == 3:
             x = x.flatten(1)
+        elif x.dim() == 1:
+            x = x.unsqueeze(0)
 
         features = self.feature_extractor(x)
         print(f"🔊 audio_feature 출력 차원: {features.shape}")

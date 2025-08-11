@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import toWav from 'audiobuffer-to-wav';
 
 // [FIX] This import was causing the white screen error and has been removed.
 // import ReactMarkdown from 'react-markdown'; 
@@ -81,9 +82,14 @@ const StudentView = () => {
   const [finalReport, setFinalReport] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState(null);
+  const [userName, setUserName] = useState('');
+  const [topic, setTopic] = useState('');
 
   const videoRef = useRef(null);
   const mediaStreamRef = useRef(null);
+  const currentRecorderRef = useRef(null);
+  const nextRecorderRef = useRef(null);
+  const cleanupTimeoutsRef = useRef(null);
   const streamIntervalRef = useRef(null);
 
   // WebSocket 연결 및 메시지 핸들러 설정
@@ -168,28 +174,120 @@ const StudentView = () => {
     }
   }, [phase]);
 
+  const processAudioChunk = async (audioBlob) => {
+    const arrayBuffer = await audioBlob.arrayBuffer();
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    console.log('오디오 디코딩 시작...');
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    console.log('오디오 디코딩 성공');
+    console.log('채널 수:', audioBuffer.numberOfChannels);
+    console.log('샘플레이트:', audioBuffer.sampleRate);
+    console.log('길이:', audioBuffer.length);
+    console.log('재생 시간:', audioBuffer.duration, '초');
+    
+    const wavBuffer = toWav(audioBuffer);
+    const audio = btoa(String.fromCharCode(...new Uint8Array(wavBuffer)));
+
+    // 비디오 프레임 캡처
+    let frame = "";
+    if (videoRef.current && videoRef.current.readyState === 4) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1080;
+        canvas.height = 720;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        frame = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+    }
+
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+            type: 'data_chunk',
+            frame,
+            audio
+        }));
+    }
+  };
+
   const startStreaming = () => {
     const socket = socketRef.current;
-    if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'start_session', user_name: '학생A', topic: '경영정보시스템' }));
-        
-        streamIntervalRef.current = setInterval(() => {
-            if (videoRef.current && videoRef.current.readyState === 4) {
-                const canvas = document.createElement('canvas');
-                canvas.width = videoRef.current.videoWidth;
-                canvas.height = videoRef.current.videoHeight;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-                const frame = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-                
-                const audio = ""; 
+    let recorderIndex = 0;
+    let timeoutIds = []; // timeout ID들을 저장할 배열
+    
+    // cleanup 함수 미리 정의
+    const cleanup = () => {
+        console.log('cleanup 실행, timeout 개수:', timeoutIds.length);
+        timeoutIds.forEach(id => {
+            clearTimeout(id);
+            console.log('timeout 정리됨:', id);
+        });
+        timeoutIds = [];
+    };
 
-                if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-                    socketRef.current.send(JSON.stringify({ type: 'data_chunk', frame, audio }));
-                }
+    // stopStreaming에서 사용할 수 있도록 ref에 저장
+    cleanupTimeoutsRef.current = cleanup;
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'start_session', user_name: userName, topic: topic }));
+
+      // 오디오 MediaRecorder 준비
+      if (mediaStreamRef.current) {
+        const audioStream = new MediaStream(mediaStreamRef.current.getAudioTracks());
+
+        const createRecorder = (index) => {
+          const mediaRecorder = new window.MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+          mediaRecorder.ondataavailable = async (e) => {
+            console.log('데이터 사용 가능:', e.data.size); // 디버깅용
+            if (e.data.size > 0) {
+              try{
+                await processAudioChunk(e.data);
+              } catch (error) {
+                console.error('Recorder ${index} 오류:', error);
+              }
             }
-        }, 1000 / 2); // Reduced frequency for testing
-    }
+          };
+          // 1초마다 ondataavailable 발생, 녹음은 계속 이어짐
+          mediaRecorder.onstop = () => {
+            console.log(`Recorder ${index} 정지됨`);
+          };
+          return mediaRecorder;
+        };
+
+        const startNextRecorder = () => {
+          recorderIndex++;
+          nextRecorderRef.current = createRecorder(recorderIndex);
+
+          // timeout ID를 배열에 저장
+          const timeoutId1 = setTimeout(() => {
+              if (nextRecorderRef.current && nextRecorderRef.current.state === 'inactive') {
+                  nextRecorderRef.current.start();
+                  console.log(`Recorder ${recorderIndex} 시작됨`);
+              }
+          }, 900);
+          timeoutIds.push(timeoutId1); // 배열에 추가
+        
+          // 1초 후 현재 recorder 정지하고 교체
+          const timeoutId2 = setTimeout(() => {
+              if (currentRecorderRef.current && currentRecorderRef.current.state === 'recording') {
+                  currentRecorderRef.current.stop();
+              }
+              currentRecorderRef.current = nextRecorderRef.current;
+              nextRecorderRef.current = null;
+              
+              // 다음 사이클 준비
+              startNextRecorder();
+          }, 1000);
+          timeoutIds.push(timeoutId2);
+        };
+      
+        // 첫 번째 recorder 시작
+        currentRecorderRef.current = createRecorder(recorderIndex);
+        currentRecorderRef.current.start();
+        console.log(`Recorder ${recorderIndex} 시작됨`);
+        
+        // 다음 recorder 준비
+        startNextRecorder();
+      }
+    };
   };
 
   const stopStreaming = () => {
@@ -199,13 +297,29 @@ const StudentView = () => {
       streamIntervalRef.current = null;
     }
 
-    // 2. 카메라 스트림 중지
+    // 1. 모든 timeout 정리 (가장 중요!)
+    if (cleanupTimeoutsRef.current) {
+        cleanupTimeoutsRef.current();
+        cleanupTimeoutsRef.current = null;
+    }
+
+    // 3. 모든 MediaRecorder 중지 (듀얼이므로 둘 다 체크)
+    if (currentRecorderRef.current && currentRecorderRef.current.state === 'recording') {
+        currentRecorderRef.current.stop();
+        currentRecorderRef.current = null;
+    }
+    if (nextRecorderRef.current && nextRecorderRef.current.state === 'recording') {
+        nextRecorderRef.current.stop();
+        nextRecorderRef.current = null;
+    }
+
+    // 4. 카메라 스트림 중지
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(track => track.stop());
       mediaStreamRef.current = null;
     }
     
-    // 3. 백엔드에 세션 종료 메시지 전송
+    // 5. 백엔드에 세션 종료 메시지 전송
     const socket = socketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
         console.log('백엔드로 end_session 메시지를 전송합니다.');
@@ -243,10 +357,29 @@ const StudentView = () => {
                 </div>
             }
           </div>
+          {!isStreaming && (
+            <div className="mb-6 flex flex-col items-center gap-3">
+              <input
+                type="text"
+                placeholder="이름을 입력하세요"
+                className="p-3 border-2 border-gray-200 rounded-lg w-64"
+                value={userName}
+                onChange={e => setUserName(e.target.value)}
+              />
+              <input
+                type="text"
+                placeholder="학습 주제를 입력하세요"
+                className="p-3 border-2 border-gray-200 rounded-lg w-64"
+                value={topic}
+                onChange={e => setTopic(e.target.value)}
+              />
+            </div>
+          )}
           {!isStreaming ? (
             <button
                 onClick={startStreaming}
                 className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-8 rounded-lg text-lg transition-transform transform hover:scale-105"
+                disabled={!userName || !topic} // 입력값 없으면 비활성화
             > 학습 시작 </button>
           ) : (
             <button
