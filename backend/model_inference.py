@@ -193,12 +193,7 @@ class EndtoEndModel(nn.Module):
         img_features = self.mobile_net(mobilenet_batch)
         yaw_f, pitch_f, eye_features = self.eye_track_model(l2cs_batch)
 
-        yaws = []
-        pitches = []
-        for i in range(batch_size):
-            yaw, pitch = predict(yaw_f[i:i+1], pitch_f[i:i+1])
-            yaws.append(yaw)
-            pitches.append(pitch)
+        yaw, pitch = predict(yaw_f[i:i+1], pitch_f[i:i+1])
         
         mobilenet_features = self.mobilenet_proj(img_features)
         l2cs_features = self.l2cs_proj(eye_features)
@@ -213,7 +208,7 @@ class EndtoEndModel(nn.Module):
         fused_feature = self.fusion_block(z_visual, z_audio)
         class_output = self.final_classifier(fused_feature)
 
-        return z_visual, z_audio, class_output, [yaws, pitches], audio_class
+        return z_visual, z_audio, class_output, [yaw, pitch], audio_class
 
 def load_model():
     # L2CS 객체 초기화
@@ -267,8 +262,9 @@ def warmup_model(face_box, e2e_model, jpg_input_shape=(1,3,640,640), jpg2_input_
     with torch.no_grad():
         for _ in range(2):  # 2회 정도 실행
             face_box(dummy_jpg_input)
-            e2e_model(dummy_jpg2_input, dummy_aud_input)
+            result = e2e_model(dummy_jpg2_input, dummy_aud_input)
     logger.info("Warmup Finished")
+    return result
 
 
 def run(face_box, e2e_model, img, aud):
@@ -373,4 +369,5 @@ def run(face_box, e2e_model, img, aud):
 
 if __name__=="__main__":
     face_box, e2e = load_model()
-    warmup_model(face_box, e2e)
+    result = warmup_model(face_box, e2e)
+    print(result)
