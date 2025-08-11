@@ -3,6 +3,7 @@ uvicorn
 python-dotenv
 torch
 torchvision
+torchaudio
 opencv-python
 Pillow
 face_alignment
@@ -14,7 +15,6 @@ starlette
 ultralytics
 Markdown
 numpy==1.26.4
-torchaudio
 scikit-learn
 joblib
 librosa

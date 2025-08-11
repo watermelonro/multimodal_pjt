@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "audiobuffer-to-wav": "^1.0.0",
+    "install": "^0.13.0",
+    "npm": "^11.5.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-markdown": "^9.0.1"

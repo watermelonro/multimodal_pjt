@@ -94,6 +94,7 @@ class LectureAnalyzer:
             # End-to-End 멀티모달 모델 로드
             self.face_box_model, self.e2e_model = model_inference.load_model()
             self.e2e_model.to(self.device)
+            model_inference.warmup_model(self.face_box_model, self.e2e_model)
             logger.info("✅ 멀티모달 추론 모델 로드 완료")
 
         except Exception as e:
