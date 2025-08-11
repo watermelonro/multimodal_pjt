@@ -8,10 +8,14 @@ import logging
 import os
 from typing import Dict, Any
 from queue import Queue
+import queue
+import threading
+import time
 
 import torch
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -76,7 +80,6 @@ class SessionManager:
             "user_name": user_name,
             "topic": topic,
             "start_time": datetime.now(),
-            "last_timestamp": 0.0,
         }
         logger.info(f"세션 생성됨: {session_id} (사용자: {user_name})")
         return session_id
@@ -122,6 +125,8 @@ class LectureAnalyzer:
             # 1. 데이터 전처리
             pil_image = Image.open(io.BytesIO(frame_data))
 
+            pil_image.save("output.jpg")
+
             audio_tensor = preprocess_audio_data(self.pad, audio_path)
 
             # 2. 모델 추론 실행
@@ -132,13 +137,13 @@ class LectureAnalyzer:
             )
 
             # 3. 결과 구조화
-            current_time = last_timestamp + config.TIMESTEP
+            start_time = last_timestamp - config.TIMESTEP
             result = {
-                "timestamp": {"start": last_timestamp, "end": current_time},
+                "timestamp": {"start": start_time, "end": last_timestamp},
                 "result": {"num": pred_num, "str": pred_str},
                 "pose": {"yaw": float(yaw), "pitch": float(pitch)},
                 "noise": {"num": noise_num, "str": noise_str},
-                "text": f"({self._format_time(current_time)} 지점의 강의 내용) ",  # Whisper 연동 시 실제 텍스트로 대체
+                "text": f"({self._format_time(start_time)}~ {self._format_time(last_timestamp)}지점의 강의 내용) ",  # Whisper 연동 시 실제 텍스트로 대체
             }
             return result
 
@@ -155,7 +160,7 @@ class LectureAnalyzer:
         try:
             # 1. 피드백 생성 클래스 사용 (그래프 이미지가 HTML에 포함됨)
             feedback_generator = GenerateFeedback()
-            doc = collection.find_one({"sessionid": session_id}, {"_id": 0, "results": 1})
+            doc = collection.find_one({"session_id": session_id}, {"_id": 0, "results": 1})
             results = doc.get("results", []) if doc else []
             if not results:
                 logger.warning("분석할 데이터가 없어 리포트를 생성할 수 없습니다.")
@@ -207,157 +212,213 @@ except RuntimeError as e:
 
 class SessionAudioBuffer:
     def __init__(self, session_id: str, analyzer):
+        # 유저 정보
         self.session_id = session_id
-        self.current_buffer = b''
-        self.backup_buffer = b''  # 처리 중일 때 사용할 백업 버퍼
-        self.buffer_select = 0
+        
+        # 상태 확인용 (스레드 안전)
         self.num_chunks = 0
-        self.frame_latest = None
-        self.is_processing = False
-        self.processing_queue = Queue()
+        self._processing_lock = threading.Lock()
+        self._is_processing = False
+        self._shutdown = False
+
+        # 모델
         self.analyzer = analyzer
-        self.executor = ThreadPoolExecutor(max_workers=2)
-        self.pending_results = []  # 대기 중인 결과들
-        
-    def add_chunk(self, audio_b64: str, frame_b64: str):
-        """청크 추가 (논블로킹)"""
-        audio_bytes = base64.b64decode(audio_b64)
 
-        if self.is_processing:
-            # 처리 중이면 백업 버퍼에 저장
-            self.backup_buffer += audio_bytes
-            logger.info(f"Session {self.session_id}: 처리 중이므로 백업 버퍼에 저장")
-        else:
-            # 평상시에는 메인 버퍼에 저장
-            self.current_buffer += audio_bytes
+        # 데이터 저장
+        self.buffer = b''
+        self.frame_latest = None
+        self.data_queue = Queue(maxsize=5)  # 백프레셔 방지
+        
+        # 모델 처리 스레드
+        self.model_queue = Queue()
+        self.model_thread = threading.Thread(target=self._model_worker)
+        self.model_thread.start()
 
-        # 프레임 업데이트
-        if frame_b64:
-            self.frame_latest = base64.b64decode(frame_b64)
+    def is_processing(self):
+        with self._processing_lock:
+            return self._is_processing
         
-        self.num_chunks += 1
+    def _set_processing(self, value):
+        with self._processing_lock:
+            self._is_processing = value
+
+    def _model_worker(self):
+        """모델 추론 전용 워커 스레드"""
+        while not self._shutdown:
+            try:
+                task = self.model_queue.get_nowait()
+                if task is None:  # 종료 신호
+                    break
+                
+                start_time = time.time()
+                logger.info(f"Session {task['session_id']}: 모델 추론 시작")
+                
+                # WAV 파일 저장
+                wav_path = self._save_wav_file(task)
+                
+                try:
+                    # 모델 추론
+                    result = self.analyzer.process_chunk(
+                        task['frame'], wav_path, task['timestamp']
+                    )
+                    
+                    processing_time = time.time() - start_time
+                    logger.info(f"Session {task['session_id']}: 모델 추론 완료 ({processing_time:.2f}초)")
+
+                    # MongoDB에 저장
+                    save_result(self.session_id, result)
+                    
+                except Exception as e:
+                    logger.error(f"모델 추론 오류 (Session {task['session_id']}): {e}")
+                finally:
+                    # 파일 정리
+                    self._cleanup_wav_file(wav_path)
+                
+            except queue.Empty:
+                time.sleep(0.1)
+                continue
+            except Exception as e:
+                logger.error(f"모델 워커 오류: {e}")
+            finally:
+                # 처리 완료 플래그
+                self._set_processing(False)
+
+    def _save_wav_file(self, task):
+        """WAV 파일 저장"""
+        wav_path = os.path.join(
+            config.TEMP_DIR_PATH, 
+            f"audio_{task['timestamp']:03d}_{task['session_id']}.wav"
+        )
+        os.makedirs(config.TEMP_DIR_PATH, exist_ok=True)
         
-        # 10초가 지났고 처리 중이 아니면 백그라운드에서 처리 시작
-        if self.should_process() and not self.is_processing:
-            future = self.start_background_processing()
-            return future
+        logger.info(f"💾 원본 audio_bytes 크기: {len(task['audio_bytes'])} bytes")
         
-        return None
+        merged_wav = merge(task['audio_bytes'])
+        logger.info(f"💾 합쳐진 WAV 크기: {len(merged_wav)} bytes")
+        
+        with open(wav_path, "wb") as f:
+            f.write(merged_wav)
+
+        file_size = os.path.getsize(wav_path)
+        logger.info(f"💾 저장된 WAV 파일 크기: {file_size} bytes")
+        
+        return wav_path
+    
+    def _cleanup_wav_file(self, wav_path):
+        """WAV 파일 정리"""
+        try:
+            if os.path.exists(wav_path):
+                os.remove(wav_path)
+                logger.debug(f"WAV 파일 삭제: {wav_path}")
+        except Exception as e:
+            logger.warning(f"WAV 파일 삭제 실패 {wav_path}: {e}")
+        
+    async def add_chunk(self, audio_b64: str, frame_b64: str):
+        """청크 추가 (완전 논블로킹)"""
+        if self._shutdown:
+            return None
+            
+        try:
+            audio_bytes = base64.b64decode(audio_b64)
+            self.buffer += audio_bytes
+            logger.info(f"Session {self.session_id}: 오디오 데이터를 버퍼에 저장 중")
+
+            # 프레임 업데이트
+            if frame_b64:
+                self.frame_latest = base64.b64decode(frame_b64)
+            
+            self.num_chunks += 1
+            logger.info(f"Session {self.session_id}: 현재 num_chunks = {self.num_chunks}")
+            
+            # 10초가 지났으면 데이터 queue에 정보 저장 후 초기화
+            if self.should_process():
+                self._enqueue_for_processing()
+
+            # 만약 모델이 쉬고 있다면 process 진행
+            self._try_start_model_processing()
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"청크 추가 오류 (Session {self.session_id}): {e}")
+            return None
+        
+    def _enqueue_for_processing(self):
+        """처리할 데이터를 큐에 추가"""
+        try:
+            processing_data = {
+                "audio_bytes": self.buffer,
+                "frame": self.frame_latest,
+                "timestamp": int(self.num_chunks),
+                "session_id": self.session_id
+            }
+            
+            # 논블로킹으로 큐에 추가 (큐가 꽉 차면 가장 오래된 것 제거)
+            try:
+                self.data_queue.put_nowait(processing_data)
+                logger.info(f"Session {self.session_id}: 현재 data_queue 크기 = {self.data_queue.qsize()}")
+            except queue.Full:
+                # 오래된 데이터 제거하고 새 데이터 추가
+                try:
+                    self.data_queue.get_nowait()
+                    self.data_queue.put_nowait(processing_data)
+                    logger.warning(f"Session {self.session_id}: 큐가 가득참, 오래된 데이터 제거")
+                except queue.Empty:
+                    pass
+            
+            # 버퍼 초기화
+            self.buffer = b""
+            self.frame_latest = None
+            
+        except Exception as e:
+            logger.error(f"데이터 큐 추가 오류: {e}")
     
     def should_process(self) -> bool:
         return self.num_chunks % config.TIMESTEP == 0
     
-    def start_background_processing(self):
-        """백그라운드에서 처리 시작"""
-        if self.is_processing:
+    def _try_start_model_processing(self):
+        """모델 처리 시작 시도 (스레드 안전)"""
+        if self.is_processing() or self.data_queue.empty():
             return
-            
-        self.is_processing = True
         
-        # 현재 버퍼를 처리 대상으로 넘기고, 새 버퍼 시작
-        processing_data = {
-            'audio_bytes': self.current_buffer,
-            'frame': self.frame_latest,
-            'timestamp' : int(self.num_chunks//config.TIMESTEP - 1),
-            'session_id': self.session_id
-        }
-        
-        # 백업 버퍼를 메인으로 이동 (처리 중 쌓인 데이터)
-        self.current_buffer = self.backup_buffer
-        self.backup_buffer = b''
-        self.frame_latest = None
-        
-        # 백그라운드 스레드에서 처리
-        future = self.executor.submit(self._process_background, processing_data)
-
-        future.add_done_callback(self._on_processing_complete)
-        
-        logger.info(f"Session {self.session_id}: 백그라운드 처리 시작, 새 버퍼로 계속 수집")
-        return future
-    
-    def _process_background(self, data):
-        """백그라운드에서 실제 처리"""
-        try:
-            wav_path = os.path.join(config.TEMP_DIR_PATH, f"audio_{data['timestamp']:03d}_{data['session_id']}.wav")
-            
-            os.makedirs(config.TEMP_DIR_PATH, exist_ok=True)
-
-            logger.info(f"💾 원본 audio_bytes 크기: {len(data['audio_bytes'])} bytes")
-
-            merged_wav = merge(data['audio_bytes'])
-            logger.info(f"💾 합쳐진 WAV 크기: {len(merged_wav)} bytes")
-
-            # WAV 파일 저장
-            with open(wav_path, "wb") as f:
-                f.write(merged_wav)
-
-            # 파일 크기 확인
-            file_size = os.path.getsize(wav_path)
-            logger.info(f"💾 저장된 WAV 파일 크기: {file_size} bytes")
-            
-            # WAV 파일 길이 확인
-            import wave
+        with self._processing_lock:
+            if self._is_processing:  # 다시 한번 체크
+                return
+                
             try:
-                with wave.open(wav_path, 'rb') as wav_file:
-                    frames = wav_file.getnframes()
-                    sample_rate = wav_file.getframerate()
-                    duration = frames / sample_rate
-                    logger.info(f"🎵 최종 WAV 파일 길이: {duration:.2f}초")  # 이제 10초 나와야 함!
+                processing_data = self.data_queue.get_nowait()
+                self._is_processing = True
+                
+                # 모델 워커 스레드에게 작업 전달
+                self.model_queue.put(processing_data)
+                logger.info(f"Session {self.session_id}: 모델 처리 작업을 워커 스레드에 전달")
+                
+            except queue.Empty:
+                return
             except Exception as e:
-                logger.error(f"WAV 파일 분석 실패: {e}")
+                logger.error(f"모델 처리 시작 오류: {e}")
+                self._is_processing = False
+    
+    def cleanup(self):
+        """리소스 정리"""
+        logger.info(f"Session {self.session_id}: 정리 시작")
+        
+        # 종료 플래그 설정
+        self._shutdown = True
+        
+        # 남은 작업들 완료 대기 (최대 10초)
+        remaining_tasks = self.data_queue.qsize()
+        if remaining_tasks > 0:
+            logger.info(f"Session {self.session_id}: {remaining_tasks}개 작업 완료 대기 중...")
             
-            logger.info(f"Session {data['session_id']}: 처리 시작)")
-            
-            # 시간이 오래 걸리는 모델 처리
-            result = self.analyzer.process_chunk(data['frame'], wav_path, data['timestamp'])  # 이게 5-10초 걸려도 OK
-            
-            logger.info(f"Session {data['session_id']}: 처리 완료 - {result}")
-            
-            # 파일 정리
-            """
-            os.remove(wav_path)
-            """
-            
-            return {
-                'session_id': data['session_id'],
-                'result': result,
-                'success': True
-            }
-            
-        except Exception as e:
-            logger.error(f"백그라운드 처리 오류: {e}")
-        finally:
-            # 처리 완료 플래그
-            self.is_processing = False
-
-    def _on_processing_complete(self, future):
-        """처리 완료 콜백"""
-        try:
-            result = future.result()
-            if result['success']:
-                logger.info(f"처리 성공: {result['result']}")
-                # 여기서 결과를 저장하거나 전송
-                self.handle_result(result)
-            else:
-                logger.error(f"처리 실패: {result['error']}")
-        except Exception as e:
-            logger.error(f"결과 처리 중 오류: {e}")
-
-    def handle_result(self, result):
-        """결과 처리 - 오버라이드 가능"""
-        # 결과를 큐에 저장하거나 즉시 처리
-        self.processing_queue.put(result)
-
-    def get_latest_results(self):
-        """완료된 결과들 가져오기"""
-        results = []
-        while not self.processing_queue.empty():
-            try:
-                result = self.processing_queue.get_nowait()
-                results.append(result)
-            except:
-                break
-        return results
+        # 모델 워커 스레드 종료
+        self.model_queue.put(None)
+        if self.model_thread.is_alive():
+            self.model_thread.join(timeout=10)
+            if self.model_thread.is_alive():
+                logger.warning(f"Session {self.session_id}: 워커 스레드 강제 종료")
+        
+        logger.info(f"Session {self.session_id}: 정리 완료")
 
 # 전역 세션 관리
 session_buffers = {}
@@ -451,54 +512,32 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     buffer = session_buffers[session_id]
 
-                    future = buffer.add_chunk(
+                    await buffer.add_chunk(
                         message.get("audio"),
                         message.get("frame"),
                     )
 
-                    """
-                    future = {
-                        'session_id': data['session_id'],
-                        'result': result,
-                        'success': True
-                    }
+                    # --- Add counter for less frequent feedback ---
+                    if "feedback_counter" not in session:
+                        session["feedback_counter"] = 0
+                    session["feedback_counter"] += 1
 
-                    result = {
-                        "timestamp": {"start": last_timestamp, "end": current_time},
-                        "result": {"num": pred_num, "str": pred_str},
-                        "pose": {"yaw": float(yaw), "pitch": float(pitch)},
-                        "noise": {"num": noise_num, "str": noise_str},
-                        "text": f"({self._format_time(current_time)} 지점의 강의 내용) ",  # Whisper 연동 시 실제 텍스트로 대체
-                    }
-                    """
-                    # 즉시 결과 필요하면 (블로킹)
-                    if future:
-                        result = future.result()  # 처리 완료까지 기다림
-
-                        save_result(session_id, result)
-                        logger.info(
-                            f"세션 {session_id}: results 리스트 크기: {len(session['results'])}"
-                        )
-                        session["last_timestamp"] = result["timestamp"]["end"]
-
-                        # --- Add counter for less frequent feedback ---
-                        if "feedback_counter" not in session:
-                            session["feedback_counter"] = 0
-                        session["feedback_counter"] += 1
-
-                        if (
-                            session["feedback_counter"] % 3 == 0
-                        ):  # Send feedback every 3 data_chunks
+                    if (
+                        session["feedback_counter"] % 5 == 0
+                    ):  # Send feedback every 10 data_chunks
+                        doc = collection.find_one({"session_id": session_id}, {"_id": 0, "results": 1})
+                        results = doc.get("results", []) if doc else []
+                        if results:
                             await websocket.send_json(
                                 {
                                     "type": "realtime_feedback",
-                                    "concentration": result["result"]["str"],
-                                    "noise": result["noise"]["str"],
+                                    "concentration": results[-1]['result']['str'],
+                                    "noise": results[-1]['noise']['str'],
                                 }
                             )
-                        # --- End of counter logic ---
+                    # --- End of counter logic ---
 
-                        await asyncio.sleep(0.01)  # Increased sleep duration
+                    await asyncio.sleep(0.01)  # Increased sleep duration
 
     except WebSocketDisconnect:
         logger.info("웹소켓 연결이 끊어졌습니다.")

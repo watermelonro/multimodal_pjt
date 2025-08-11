@@ -37,3 +37,6 @@ lerna-debug.log*
 
 # Temp File
 temp/
+*.jpg
+*.ipynb
+*.html

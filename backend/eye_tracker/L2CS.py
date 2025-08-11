@@ -129,7 +129,6 @@ def predict_batch(yaw_logits, pitch_logits, device=None):
 
     return yaw, pitch  # 그대로 텐서로 반환
 
-
 def predict(yaw_logits, pitch_logits, device=None):
     yaw_probs = F.softmax(yaw_logits, dim=1)
     pitch_probs = F.softmax(pitch_logits, dim=1)
