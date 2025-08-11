@@ -13,10 +13,11 @@ import torch
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
 
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+from pymongo import MongoClient
 
 # --- 프로젝트 모듈 임포트 ---
 import config
@@ -47,6 +48,17 @@ app.add_middleware(
 # 생성된 그래프 이미지 등을 제공하기 위한 정적 파일 경로 마운트
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 
+client = MongoClient("mongodb://localhost:27017")
+db = client["mydatabase"]
+collection = db["sessions"]
+
+def save_result(sessionid, result):
+    collection.update_one(
+        {"session_id": sessionid},
+        {"$push": {"results": result}},
+        upsert=True
+    )
+
 # 전역 세션 관리
 session_buffers = {}
 executor = ThreadPoolExecutor(max_workers=4)  # 동시 처리 가능한 세션 수
@@ -64,7 +76,6 @@ class SessionManager:
             "user_name": user_name,
             "topic": topic,
             "start_time": datetime.now(),
-            "results": [],
             "last_timestamp": 0.0,
         }
         logger.info(f"세션 생성됨: {session_id} (사용자: {user_name})")
@@ -135,20 +146,20 @@ class LectureAnalyzer:
             logger.error(f"실시간 처리 중 오류 발생: {e}", exc_info=True)
             return None
 
-    def generate_final_report(self, session_data: Dict[str, Any]) -> Dict[str, Any]:
+    def generate_final_report(self, session_data: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         """세션 종료 시 종합 리포트 생성"""
         user_name = session_data["user_name"]
         topic = session_data["topic"]
-        results = session_data["results"]
-
-        if not results:
-            logger.warning("분석할 데이터가 없어 리포트를 생성할 수 없습니다.")
-            return {"error": "분석 데이터 부족"}
 
         logger.info(f"'{user_name}'님의 최종 리포트 생성 시작...")
         try:
             # 1. 피드백 생성 클래스 사용 (그래프 이미지가 HTML에 포함됨)
             feedback_generator = GenerateFeedback()
+            doc = collection.find_one({"sessionid": session_id}, {"_id": 0, "results": 1})
+            results = doc.get("results", []) if doc else []
+            if not results:
+                logger.warning("분석할 데이터가 없어 리포트를 생성할 수 없습니다.")
+                return {"error": "분석 데이터 부족"}
             full_html_report = feedback_generator.generate(
                 topic=topic, name=user_name, data=results
             )
@@ -393,7 +404,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                     try:
                         final_report = await asyncio.to_thread(
-                            analyzer.generate_final_report, session
+                            analyzer.generate_final_report, session, session_id
                         )
 
                         logger.info(f"리포트 생성 완료, 전송 시작: {session_id}")
@@ -464,7 +475,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     if future:
                         result = future.result()  # 처리 완료까지 기다림
 
-                        session["results"].append(result)
+                        save_result(session_id, result)
                         logger.info(
                             f"세션 {session_id}: results 리스트 크기: {len(session['results'])}"
                         )

@@ -34,3 +34,6 @@ lerna-debug.log*
 .idea/
 *.swp
 *.swo
+
+# Temp File
+temp/
