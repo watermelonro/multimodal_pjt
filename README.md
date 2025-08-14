@@ -21,7 +21,6 @@
 ```
 .
 ├── backend/         # FastAPI 백엔드 서버
-│   ├── app.py       # (사용되지 않음, main.py가 주 진입점)
 │   ├── config.py    # 설정 변수
 │   ├── data_process.py # 수집 데이터 후처리
 │   ├── feedback_generator.py # 피드백 생성 클래스
