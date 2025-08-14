@@ -3,9 +3,9 @@ import toWav from 'audiobuffer-to-wav';
 
 // [FIX] This import was causing the white screen error and has been removed.
 // import ReactMarkdown from 'react-markdown'; 
-
-const API_URL = 'ws://localhost:8000/ws/lecture-analysis';
-const BACKEND_URL = 'http://localhost:8000';
+const host = window.location.hostname;
+const API_URL = `ws://${host}:8000/ws/lecture-analysis`;
+const BACKEND_URL = `http://${host}:8000`;
 
 // --- Mock Data (백엔드 연동 전 임시 데이터) ---
 const mockTeacherData = {

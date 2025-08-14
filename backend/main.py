@@ -43,7 +43,7 @@ app = FastAPI()
 # --- CORS 미들웨어 설정 ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # 개발 중에는 모든 오리진 허용
+    allow_origins=["*"],  # 개발 중에는 모든 오리진 허용
     allow_credentials=True,
     allow_methods=["*"],  # 모든 HTTP 메소드 허용
     allow_headers=["*"],  # 모든 헤더 허용
@@ -56,16 +56,17 @@ client = MongoClient("mongodb://localhost:27017")
 db = client["mydatabase"]
 collection = db["sessions"]
 
+
 def save_result(sessionid, result):
     collection.update_one(
-        {"session_id": sessionid},
-        {"$push": {"results": result}},
-        upsert=True
+        {"session_id": sessionid}, {"$push": {"results": result}}, upsert=True
     )
+
 
 # 전역 세션 관리
 session_buffers = {}
 executor = ThreadPoolExecutor(max_workers=4)  # 동시 처리 가능한 세션 수
+
 
 # --- 세션 관리를 위한 클래스 ---
 class SessionManager:
@@ -95,6 +96,7 @@ class SessionManager:
 
 session_manager = SessionManager()
 
+
 # --- 핵심 분석기 클래스 ---
 class LectureAnalyzer:
     """모든 모델을 총괄하고 데이터 분석 파이프라인을 실행"""
@@ -103,7 +105,9 @@ class LectureAnalyzer:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"분석기 초기화 중... (Device: {self.device})")
         try:
-            self.pad = load_preprocessor(os.path.join(config.MODELS_DIR, 'train_dataset_scaler_gpu.pkl'))
+            self.pad = load_preprocessor(
+                os.path.join(config.MODELS_DIR, "train_dataset_scaler_gpu.pkl")
+            )
             logger.info("✅ 음성 전처리 모듈 로드 완료")
             # End-to-End 멀티모달 모델 로드
             self.face_box_model, self.e2e_model = model_inference.load_model()
@@ -151,7 +155,9 @@ class LectureAnalyzer:
             logger.error(f"실시간 처리 중 오류 발생: {e}", exc_info=True)
             return None
 
-    def generate_final_report(self, session_data: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    def generate_final_report(
+        self, session_data: Dict[str, Any], session_id: str
+    ) -> Dict[str, Any]:
         """세션 종료 시 종합 리포트 생성"""
         user_name = session_data["user_name"]
         topic = session_data["topic"]
@@ -160,7 +166,9 @@ class LectureAnalyzer:
         try:
             # 1. 피드백 생성 클래스 사용 (그래프 이미지가 HTML에 포함됨)
             feedback_generator = GenerateFeedback()
-            doc = collection.find_one({"session_id": session_id}, {"_id": 0, "results": 1})
+            doc = collection.find_one(
+                {"session_id": session_id}, {"_id": 0, "results": 1}
+            )
             results = doc.get("results", []) if doc else []
             if not results:
                 logger.warning("분석할 데이터가 없어 리포트를 생성할 수 없습니다.")
@@ -174,7 +182,7 @@ class LectureAnalyzer:
             safe_user_name = "".join(c for c in user_name if c.isalnum())
             report_filename = f"feedback_{safe_user_name}_{uuid.uuid4().hex[:6]}.html"
             report_path_abs = os.path.join(config.STATIC_DIR, report_filename)
-            
+
             try:
                 with open(report_path_abs, "w", encoding="utf-8") as f:
                     f.write(full_html_report)
@@ -202,7 +210,8 @@ class LectureAnalyzer:
         mins = int(seconds // 60)
         secs = int(seconds % 60)
         return f"{mins:02d}분 {secs:02d}초"
-    
+
+
 # --- 전역 분석기 인스턴스 생성 ---
 try:
     analyzer = LectureAnalyzer()
@@ -210,11 +219,12 @@ except RuntimeError as e:
     logger.critical(f"분석기 인스턴스 생성 실패. 서버를 종료합니다. 오류: {e}")
     analyzer = None
 
+
 class SessionAudioBuffer:
     def __init__(self, session_id: str, analyzer):
         # 유저 정보
         self.session_id = session_id
-        
+
         # 상태 확인용 (스레드 안전)
         self.num_chunks = 0
         self._processing_lock = threading.Lock()
@@ -225,10 +235,10 @@ class SessionAudioBuffer:
         self.analyzer = analyzer
 
         # 데이터 저장
-        self.buffer = b''
+        self.buffer = b""
         self.frame_latest = None
         self.data_queue = Queue(maxsize=5)  # 백프레셔 방지
-        
+
         # 모델 처리 스레드
         self.model_queue = Queue()
         self.model_thread = threading.Thread(target=self._model_worker)
@@ -237,7 +247,7 @@ class SessionAudioBuffer:
     def is_processing(self):
         with self._processing_lock:
             return self._is_processing
-        
+
     def _set_processing(self, value):
         with self._processing_lock:
             self._is_processing = value
@@ -249,31 +259,33 @@ class SessionAudioBuffer:
                 task = self.model_queue.get_nowait()
                 if task is None:  # 종료 신호
                     break
-                
+
                 start_time = time.time()
                 logger.info(f"Session {task['session_id']}: 모델 추론 시작")
-                
+
                 # WAV 파일 저장
                 wav_path = self._save_wav_file(task)
-                
+
                 try:
                     # 모델 추론
                     result = self.analyzer.process_chunk(
-                        task['frame'], wav_path, task['timestamp']
+                        task["frame"], wav_path, task["timestamp"]
                     )
-                    
+
                     processing_time = time.time() - start_time
-                    logger.info(f"Session {task['session_id']}: 모델 추론 완료 ({processing_time:.2f}초)")
+                    logger.info(
+                        f"Session {task['session_id']}: 모델 추론 완료 ({processing_time:.2f}초)"
+                    )
 
                     # MongoDB에 저장
                     save_result(self.session_id, result)
-                    
+
                 except Exception as e:
                     logger.error(f"모델 추론 오류 (Session {task['session_id']}): {e}")
                 finally:
                     # 파일 정리
                     self._cleanup_wav_file(wav_path)
-                
+
             except queue.Empty:
                 time.sleep(0.1)
                 continue
@@ -286,24 +298,24 @@ class SessionAudioBuffer:
     def _save_wav_file(self, task):
         """WAV 파일 저장"""
         wav_path = os.path.join(
-            config.TEMP_DIR_PATH, 
-            f"audio_{task['timestamp']:03d}_{task['session_id']}.wav"
+            config.TEMP_DIR_PATH,
+            f"audio_{task['timestamp']:03d}_{task['session_id']}.wav",
         )
         os.makedirs(config.TEMP_DIR_PATH, exist_ok=True)
-        
+
         logger.info(f"💾 원본 audio_bytes 크기: {len(task['audio_bytes'])} bytes")
-        
-        merged_wav = merge(task['audio_bytes'])
+
+        merged_wav = merge(task["audio_bytes"])
         logger.info(f"💾 합쳐진 WAV 크기: {len(merged_wav)} bytes")
-        
+
         with open(wav_path, "wb") as f:
             f.write(merged_wav)
 
         file_size = os.path.getsize(wav_path)
         logger.info(f"💾 저장된 WAV 파일 크기: {file_size} bytes")
-        
+
         return wav_path
-    
+
     def _cleanup_wav_file(self, wav_path):
         """WAV 파일 정리"""
         try:
@@ -312,12 +324,12 @@ class SessionAudioBuffer:
                 logger.debug(f"WAV 파일 삭제: {wav_path}")
         except Exception as e:
             logger.warning(f"WAV 파일 삭제 실패 {wav_path}: {e}")
-        
+
     async def add_chunk(self, audio_b64: str, frame_b64: str):
         """청크 추가 (완전 논블로킹)"""
         if self._shutdown:
             return None
-            
+
         try:
             audio_bytes = base64.b64decode(audio_b64)
             self.buffer += audio_bytes
@@ -326,23 +338,25 @@ class SessionAudioBuffer:
             # 프레임 업데이트
             if frame_b64:
                 self.frame_latest = base64.b64decode(frame_b64)
-            
+
             self.num_chunks += 1
-            logger.info(f"Session {self.session_id}: 현재 num_chunks = {self.num_chunks}")
-            
+            logger.info(
+                f"Session {self.session_id}: 현재 num_chunks = {self.num_chunks}"
+            )
+
             # 10초가 지났으면 데이터 queue에 정보 저장 후 초기화
             if self.should_process():
                 self._enqueue_for_processing()
 
             # 만약 모델이 쉬고 있다면 process 진행
             self._try_start_model_processing()
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"청크 추가 오류 (Session {self.session_id}): {e}")
             return None
-        
+
     def _enqueue_for_processing(self):
         """처리할 데이터를 큐에 추가"""
         try:
@@ -350,79 +364,89 @@ class SessionAudioBuffer:
                 "audio_bytes": self.buffer,
                 "frame": self.frame_latest,
                 "timestamp": int(self.num_chunks),
-                "session_id": self.session_id
+                "session_id": self.session_id,
             }
-            
+
             # 논블로킹으로 큐에 추가 (큐가 꽉 차면 가장 오래된 것 제거)
             try:
                 self.data_queue.put_nowait(processing_data)
-                logger.info(f"Session {self.session_id}: 현재 data_queue 크기 = {self.data_queue.qsize()}")
+                logger.info(
+                    f"Session {self.session_id}: 현재 data_queue 크기 = {self.data_queue.qsize()}"
+                )
             except queue.Full:
                 # 오래된 데이터 제거하고 새 데이터 추가
                 try:
                     self.data_queue.get_nowait()
                     self.data_queue.put_nowait(processing_data)
-                    logger.warning(f"Session {self.session_id}: 큐가 가득참, 오래된 데이터 제거")
+                    logger.warning(
+                        f"Session {self.session_id}: 큐가 가득참, 오래된 데이터 제거"
+                    )
                 except queue.Empty:
                     pass
-            
+
             # 버퍼 초기화
             self.buffer = b""
             self.frame_latest = None
-            
+
         except Exception as e:
             logger.error(f"데이터 큐 추가 오류: {e}")
-    
+
     def should_process(self) -> bool:
         return self.num_chunks % config.TIMESTEP == 0
-    
+
     def _try_start_model_processing(self):
         """모델 처리 시작 시도 (스레드 안전)"""
         if self.is_processing() or self.data_queue.empty():
             return
-        
+
         with self._processing_lock:
             if self._is_processing:  # 다시 한번 체크
                 return
-                
+
             try:
                 processing_data = self.data_queue.get_nowait()
                 self._is_processing = True
-                
+
                 # 모델 워커 스레드에게 작업 전달
                 self.model_queue.put(processing_data)
-                logger.info(f"Session {self.session_id}: 모델 처리 작업을 워커 스레드에 전달")
-                
+                logger.info(
+                    f"Session {self.session_id}: 모델 처리 작업을 워커 스레드에 전달"
+                )
+
             except queue.Empty:
                 return
             except Exception as e:
                 logger.error(f"모델 처리 시작 오류: {e}")
                 self._is_processing = False
-    
+
     def cleanup(self):
         """리소스 정리"""
         logger.info(f"Session {self.session_id}: 정리 시작")
-        
+
         # 종료 플래그 설정
         self._shutdown = True
-        
+
         # 남은 작업들 완료 대기 (최대 10초)
         remaining_tasks = self.data_queue.qsize()
         if remaining_tasks > 0:
-            logger.info(f"Session {self.session_id}: {remaining_tasks}개 작업 완료 대기 중...")
-            
+            logger.info(
+                f"Session {self.session_id}: {remaining_tasks}개 작업 완료 대기 중..."
+            )
+
         # 모델 워커 스레드 종료
         self.model_queue.put(None)
         if self.model_thread.is_alive():
             self.model_thread.join(timeout=10)
             if self.model_thread.is_alive():
                 logger.warning(f"Session {self.session_id}: 워커 스레드 강제 종료")
-        
+
         logger.info(f"Session {self.session_id}: 정리 완료")
+
 
 # 전역 세션 관리
 session_buffers = {}
 executor = ThreadPoolExecutor(max_workers=4)  # 동시 처리 가능한 세션 수
+
 
 # --- 웹소켓 엔드포인트 ---
 @app.websocket("/ws/lecture-analysis")
@@ -508,7 +532,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 session = session_manager.get_session(session_id)
                 if session:
                     if session_id not in session_buffers:
-                        session_buffers[session_id] = SessionAudioBuffer(session_id, analyzer)
+                        session_buffers[session_id] = SessionAudioBuffer(
+                            session_id, analyzer
+                        )
 
                     buffer = session_buffers[session_id]
 
@@ -525,14 +551,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     if (
                         session["feedback_counter"] % 5 == 0
                     ):  # Send feedback every 10 data_chunks
-                        doc = collection.find_one({"session_id": session_id}, {"_id": 0, "results": 1})
+                        doc = collection.find_one(
+                            {"session_id": session_id}, {"_id": 0, "results": 1}
+                        )
                         results = doc.get("results", []) if doc else []
                         if results:
                             await websocket.send_json(
                                 {
                                     "type": "realtime_feedback",
-                                    "concentration": results[-1]['result']['str'],
-                                    "noise": results[-1]['noise']['str'],
+                                    "concentration": results[-1]["result"]["str"],
+                                    "noise": results[-1]["noise"]["str"],
                                 }
                             )
                     # --- End of counter logic ---
