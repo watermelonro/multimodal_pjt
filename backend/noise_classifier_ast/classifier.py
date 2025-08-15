@@ -4,9 +4,8 @@ import torch.nn.functional as F
 from torch.amp import autocast # type: ignore
 import os
 import wget
-os.environ['TORCH_HOME'] = 'ast_model'
 import timm
-from timm.models.layers import to_2tuple,trunc_normal_
+from timm.models.layers import to_2tuple, trunc_normal_
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(sys.path[0])))
@@ -233,7 +232,8 @@ def load_model():
     base_model = ASTModel(label_dim=6, imagenet_pretrain=False, audioset_pretrain=False, model_size='base384')
     module_dir = os.path.dirname(__file__)
     model_path = os.path.join(module_dir, '../../models/audio_noise_classifier_ast.pth')
-    return load_lora_model(base_model, model_path, torch.device('cuda'))
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    return load_lora_model(base_model, model_path, device)
 
 if __name__=="__main__":
     model = load_model()

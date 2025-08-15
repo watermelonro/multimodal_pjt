@@ -19,3 +19,6 @@ scikit-learn
 joblib
 librosa
 pymongo
+wget
+timm==0.4.5
+peft
