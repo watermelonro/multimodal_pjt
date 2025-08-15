@@ -29,7 +29,7 @@ VECTOR_DB_PATH = os.path.join(DATA_DIR, "vector_store", "경영ᄌ�
 
 # 모델 체크포인트 경로
 MODEL_CHECKPOINT_PATH = os.path.join(
-    MODELS_DIR, "checkpoints_transformer_fusion", "best.pth"
+    MODELS_DIR, "checkpoints_transformer_fusion", "best_model_ast_essentials.pth"
 )
 
 TEMP_DIR_PATH = os.path.join(PROJECT_ROOT, "temp")

@@ -4,6 +4,7 @@ import torchvision.transforms as transforms
 import torchvision
 import math
 import torch.nn.functional as F
+import os
 
 NUM_BINS = 90
 ANGLE_OFFSET = -180
@@ -102,7 +103,9 @@ def load_model():
         device = torch.device("cpu")
 
     model = L2CS(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], 90)
-    state_dict = torch.load("models/l2cs_trained.pkl", map_location=device)
+    module_dir = os.path.dirname(__file__)
+    model_path = os.path.join(module_dir, '../../models/l2cs_trained.pkl')
+    state_dict = torch.load(model_path, map_location=device)
     if isinstance(state_dict, L2CS):
         return state_dict
     model.load_state_dict(state_dict)

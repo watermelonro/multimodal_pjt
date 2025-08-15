@@ -49,8 +49,8 @@ class LLMPipeline:
 **DATA INFO:**
 - 'start_time': 학습 시작 시간
 - 'concentration': 집중도 분류 예측
-- 'pose_yaw': 좌우 시선
-- 'pose_pitch': 상하 시선
+- 'pose_yaw': 좌우 시선(음수:오른쪽, 양수:왼쪽)
+- 'pose_pitch': 상하 시선(음수:아래쪽, 양수:위쪽)
 - 'noise': 잡음 예측 결과
 
 **RAG INFO:**

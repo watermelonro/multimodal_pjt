@@ -28,7 +28,7 @@ import config
 import model_inference
 from feedback_generator import GenerateFeedback
 from data_process import analyze_concentration_changes
-from wav_process import load_preprocessor, preprocess_audio_data
+from wav_process import FastAudioPreprocessor, preprocess_audio_data
 from merge_wav import merge_wav_chunks_from_buffer as merge
 
 # --- 로깅 설정 ---
@@ -55,6 +55,16 @@ app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 client = MongoClient("mongodb://localhost:27017")
 db = client["mydatabase"]
 collection = db["sessions"]
+
+audio_conf = {
+    'num_mel_bins': 128, 
+    'target_length': 1024, 
+    'freqm': 48, 
+    'timem': 192,  
+    'dataset': 'aihub_audio_dataset', 
+    'mean':-4.2677393, 
+    'std':4.5689974
+    }
 
 def save_result(sessionid, result):
     collection.update_one(
@@ -103,7 +113,7 @@ class LectureAnalyzer:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"분석기 초기화 중... (Device: {self.device})")
         try:
-            self.pad = load_preprocessor(os.path.join(config.MODELS_DIR, 'train_dataset_scaler_gpu.pkl'))
+            self.pad = FastAudioPreprocessor(audio_conf)
             logger.info("✅ 음성 전처리 모듈 로드 완료")
             # End-to-End 멀티모달 모델 로드
             self.face_box_model, self.e2e_model = model_inference.load_model()

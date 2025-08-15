@@ -5,7 +5,7 @@ import numpy as np
 import config
 from eye_tracker.L2CS import load_model as l2cs_load
 from eye_tracker.L2CS import predict
-from noise_classifier.classifier import load_model as noise_classifier_load
+from noise_classifier_ast.classifier import load_model as noise_classifier_load
 from face_box.yolo import load_model as face_box_load
 from torchvision.models import mobilenet_v2
 from torchvision import transforms
@@ -191,17 +191,18 @@ class EndtoEndModel(nn.Module):
                 raise ValueError(f"Expected 4D tensor for batch processing, got {cropped_faces.dim()}D")
 
         img_features = self.mobile_net(mobilenet_batch)
-        yaw_f, pitch_f, eye_features = self.eye_track_model(l2cs_batch)
-
-        yaw, pitch = predict(yaw_f[i:i+1], pitch_f[i:i+1])
+        with torch.no_grad():
+            yaw_f, pitch_f, eye_features = self.eye_track_model(l2cs_batch)
+            yaw, pitch = predict(yaw_f[i:i+1], pitch_f[i:i+1])
         
         mobilenet_features = self.mobilenet_proj(img_features)
         l2cs_features = self.l2cs_proj(eye_features)
         fa_features = self.fa_proj(face_points_batch)
         z_visual = torch.stack([mobilenet_features, l2cs_features, fa_features], dim=1)
 
-        audio_feature, audio_class = self.noise_classifier(audio_features)
-        audio_class = F.softmax(audio_class, dim=1)
+        with torch.no_grad():
+            audio_class, audio_feature = self.noise_classifier(audio_features)
+            audio_class = F.softmax(audio_class, dim=1)
         
         z_audio = self.audio_proj(audio_feature)
 
@@ -224,38 +225,44 @@ def load_model():
     mobile_net_proj = ProjectionHead(input_dim=1280, proj_dim=256)
     l2cs_proj = ProjectionHead(input_dim=2048, proj_dim=256)
     fa_proj = ProjectionHead(input_dim=136, proj_dim=256)
-    audio_proj = ProjectionHead(input_dim=256, proj_dim=256)
+    audio_proj = ProjectionHead(input_dim=768, proj_dim=256)
 
     fusion_block = TransformerFusion(embed_dim=256, num_heads=4, num_layers=3)
     final_classifier = FinalClassifier(embed_dim=256, num_classes=5)
 
     e2e_model = EndtoEndModel(
-        mobile_net=MobileNetModel(),
-        eye_track_model=l2cs,
-        noise_classifier=noise_classifier,
-        face_mesh_model=fa,
-        mobilenet_proj=mobile_net_proj,
-        l2cs_proj=l2cs_proj,
-        fa_proj=fa_proj,
-        audio_proj=audio_proj,
-        fusion_block=fusion_block,
-        final_classifier=final_classifier
-    )
+            mobile_net=MobileNetModel(),
+            eye_track_model=l2cs,
+            noise_classifier=noise_classifier,
+            face_mesh_model=fa,
+            mobilenet_proj=mobile_net_proj,
+            l2cs_proj=l2cs_proj,
+            fa_proj=fa_proj,
+            audio_proj=audio_proj,
+            fusion_block=fusion_block,
+            final_classifier=final_classifier
+        )
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
     results = torch.load(
-        config.MODEL_CHECKPOINT_PATH, map_location=device, weights_only=False
-    )
-    e2e_model.load_state_dict(results["ema"].state_dict(), strict=False)
+            config.MODEL_CHECKPOINT_PATH, map_location=device, weights_only=False
+        )
+    e2e_model.load_state_dict(results, strict=False)
+    e2e_model.eye_track_model = l2cs
+    e2e_model.noise_classifier = noise_classifier
+    e2e_model.face_mesh_model = fa
+    
     face_box.eval()
     e2e_model.eval()
     return face_box, e2e_model
 
-def warmup_model(face_box, e2e_model, jpg_input_shape=(1,3,640,640), jpg2_input_shape=(1,3,448,448), aud_input_shape=(1,25)):
+def warmup_model(face_box, e2e_model, jpg_input_shape=(1,3,640,640), jpg2_input_shape=(1,3,448,448), aud_input_shape=(1, 1024, 128)):
     "빠른 추론을 위한 warmup 기능"
     logger.info("Starting Warmup")
-    face_box.eval()
-    e2e_model.eval()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    face_box = face_box.eval().to(device)
+    e2e_model = e2e_model.eval().to(device)
     dummy_jpg_input = torch.rand(jpg_input_shape).to(device) * 255
     dummy_jpg2_input = torch.rand(jpg2_input_shape).to(device) * 255
     dummy_aud_input = torch.randn(aud_input_shape).to(device)
@@ -368,6 +375,8 @@ def run(face_box, e2e_model, img, aud):
         )
 
 if __name__=="__main__":
+    import os
+    os.environ['TORCH_HOME'] = 'C:/Users/pegoo/fa_model'
     face_box, e2e = load_model()
     result = warmup_model(face_box, e2e)
     print(result)
