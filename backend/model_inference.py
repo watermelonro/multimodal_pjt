@@ -373,10 +373,3 @@ def run(face_box, e2e_model, img, aud):
             (yaw, pitch),
             (int(noise_predicted), noise_result),
         )
-
-if __name__=="__main__":
-    import os
-    os.environ['TORCH_HOME'] = 'C:/Users/pegoo/fa_model'
-    face_box, e2e = load_model()
-    result = warmup_model(face_box, e2e)
-    print(result)
