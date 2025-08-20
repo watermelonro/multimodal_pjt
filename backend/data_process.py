@@ -3,7 +3,6 @@ from typing import List, Dict, Any
 import statistics
 import os
 
-
 def analyze_concentration_changes(data: List[Dict]) -> Dict[str, Any]:
     """
     집중도 변화점을 중심으로 학습 데이터를 분석하는 함수
@@ -158,7 +157,6 @@ def analyze_concentration_changes(data: List[Dict]) -> Dict[str, Any]:
     }
 
     return result
-
 
 def is_concentration_state_changed(prev_score: int, curr_score: int) -> bool:
     """집중 상태가 변했는지 판단 (집중함 <-> 집중하지 않음)"""
@@ -336,3 +334,6 @@ if __name__ == "__main__":
     print()
     print("=== 상세 분석 데이터 ===")
     print(json.dumps(analysis_result, indent=2, ensure_ascii=False))
+
+
+

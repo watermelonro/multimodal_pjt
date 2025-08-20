@@ -1,13 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
 import toWav from 'audiobuffer-to-wav';
 
-// [FIX] This import was causing the white screen error and has been removed.
-// import ReactMarkdown from 'react-markdown'; 
-
 const API_URL = 'ws://localhost:8000/ws/lecture-analysis';
 const BACKEND_URL = 'http://localhost:8000';
 
-// --- Mock Data (백엔드 연동 전 임시 데이터) ---
+// --- 강의 주제 목록 (새로 추가) ---
+const lectureTopics = [
+    "CHAPTER 1: 경영 정보 시스템",
+    "CHAPTER 2: 의사 결정과 프로세스", 
+    "CHAPTER 3: e-비즈니스",
+    "CHAPTER 4: 윤리와 정보 보호",
+    "CHAPTER 5: 기반구조",
+    "CHAPTER 6: 데이터",
+    "CHAPTER 7: 네트워크",
+    "CHAPTER 8: 전사적 애플리케이션",
+    "CHAPTER 9: 시스템 개발과 프로젝트 관리",
+];
+
+// --- Mock Data ---
 const mockTeacherData = {
   lowEngagementTopics: [
     { topic: "전문가 시스템 (Expert Systems)", percentage: 65 },
@@ -16,10 +26,10 @@ const mockTeacherData = {
   lowEngagementTimes: [
     { time: "학습 후반 (40분 이후)", percentage: 70 },
   ],
-  llmSolution: "학생들이 '전문가 시스템'과 같은 추상적인 개념을 어려워하는 경향이 있습니다. 시각 자료나 실제 사례를 활용한 비유를 통해 개념을 설명하고, 학습 후반부에는 5분 정도의 짧은 휴식이나 스트레칭을 통해 집중력을 환기시키는 '뽀모도로 기법'을 도입하는 것을 추천합니다."
+  llmSolution: "학생들이 '전문가 시스템'과 같은 추상적인 개념을 어려워하는 경향이 있습니다."
 };
 
-// --- 재사용 가능한 UI 컴포넌트 ---
+// --- UI 컴포넌트들 ---
 const DashboardCard = ({ title, children, className }) => (
   <div className={`bg-white rounded-xl shadow-lg p-6 ${className}`}>
     <h3 className="text-xl font-bold text-gray-800 mb-4">{title}</h3>
@@ -72,9 +82,58 @@ const ChatWindow = ({ messages, onSendMessage }) => {
     );
 };
 
-// --- 페이지 컴포넌트 ---
+// --- 로그인 화면 컴포넌트 (새로 추가) ---
+const LoginScreen = ({ onLogin }) => {
+  const [studentId, setStudentId] = useState('');
+  const [lectureTopic, setLectureTopic] = useState('');
+
+  const handleLogin = () => {
+    if (studentId.trim() && lectureTopic) {
+      onLogin(studentId, lectureTopic);
+    } else {
+      alert('회원번호와 강의 주제를 모두 입력 및 선택해주세요.');
+    }
+  };
+
+  return (
+    <div className="text-center p-8 bg-white rounded-xl shadow-lg w-full max-w-md mx-auto">
+      <h2 className="text-3xl font-bold text-gray-800 mb-8">학습자 정보 입력</h2>
+      <div className="space-y-6">
+        <input
+          type="text"
+          placeholder="회원번호를 입력하세요"
+          value={studentId}
+          onChange={(e) => setStudentId(e.target.value)}
+          className="w-full p-4 border-2 border-gray-200 rounded-lg text-lg focus:outline-none focus:border-blue-500"
+        />
+        <select
+          value={lectureTopic}
+          onChange={(e) => setLectureTopic(e.target.value)}
+          className={`w-full p-4 border-2 border-gray-200 rounded-lg text-lg focus:outline-none focus:border-blue-500 ${lectureTopic ? 'text-black' : 'text-gray-400'}`}
+        >
+          <option value="" disabled>강의 주제를 선택하세요</option>
+          {lectureTopics.map(topic => (
+            <option key={topic} value={topic} className="text-black">{topic}</option>
+          ))}
+        </select>
+      </div>
+      <button
+        onClick={handleLogin}
+        className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-8 rounded-lg text-lg mt-8 transition-transform transform hover:scale-105"
+      >
+        학습 시작하기
+      </button>
+    </div>
+  );
+};
+
+// --- 학생 뷰 (이전 코드 기반 + 새 UI 적용) ---
 const StudentView = () => {
-  const [phase, setPhase] = useState('camera_setup');
+  // 새로 추가: 로그인 상태 관리
+  const [phase, setPhase] = useState('login');
+  const [studentInfo, setStudentInfo] = useState(null);
+  
+  // 기존 상태들 (이전 코드 유지)
   const [messages, setMessages] = useState([]);
   const socketRef = useRef(null);
   const [sessionId, setSessionId] = useState(null);
@@ -82,17 +141,20 @@ const StudentView = () => {
   const [finalReport, setFinalReport] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState(null);
-  const [userName, setUserName] = useState('');
-  const [topic, setTopic] = useState('');
 
   const videoRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const currentRecorderRef = useRef(null);
   const nextRecorderRef = useRef(null);
   const cleanupTimeoutsRef = useRef(null);
-  const streamIntervalRef = useRef(null);
 
-  // WebSocket 연결 및 메시지 핸들러 설정
+  // 새로 추가: 로그인 핸들러
+  const handleLogin = (id, topic) => {
+    setStudentInfo({ id, topic });
+    setPhase('camera_setup');
+  };
+
+  // WebSocket 연결 (이전 코드 그대로 유지)
   useEffect(() => {
     console.log("🔄 WebSocket 연결 시도 중...");
     const ws = new WebSocket(API_URL);
@@ -111,6 +173,7 @@ const StudentView = () => {
         console.error("❌ WebSocket 오류:", err);
         setError("서버에 연결할 수 없습니다. 백엔드 서버가 실행 중인지 확인해주세요.");
     };
+
     ws.onmessage = (event) => {
       const message = JSON.parse(event.data);
       console.log("백엔드 메시지 수신:", message);
@@ -124,9 +187,6 @@ const StudentView = () => {
           break;
         case 'report_generating':
           setPhase('loading_feedback');
-          if (streamIntervalRef.current) {
-            clearInterval(streamIntervalRef.current);
-          }
           setIsStreaming(false);
           break;
         case 'final_report':
@@ -137,6 +197,11 @@ const StudentView = () => {
             socketRef.current.close();
           }
           break;
+        case 'chat_response':
+          // AI Teacher 응답 처리
+          const aiMessage = { sender: 'llm', text: message.message };
+          setMessages(prevMessages => [...prevMessages, aiMessage]);
+          break;
         case 'error':
           setError(message.message);
           break;
@@ -144,14 +209,11 @@ const StudentView = () => {
     };
 
     return () => {
-      if (ws) {
-        ws.close();
-      }
-      if (streamIntervalRef.current) clearInterval(streamIntervalRef.current);
+      if (ws) ws.close();
     };
   }, []);
 
-  // 카메라 스트림 설정
+  // 카메라 스트림 설정 (phase 기반으로 수정)
   useEffect(() => {
     if (phase === 'camera_setup') {
       navigator.mediaDevices.getUserMedia({ video: true, audio: true })
@@ -174,21 +236,15 @@ const StudentView = () => {
     }
   }, [phase]);
 
+  // 오디오 처리 함수 (이전 코드 그대로)
   const processAudioChunk = async (audioBlob) => {
     const arrayBuffer = await audioBlob.arrayBuffer();
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    console.log('오디오 디코딩 시작...');
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-    console.log('오디오 디코딩 성공');
-    console.log('채널 수:', audioBuffer.numberOfChannels);
-    console.log('샘플레이트:', audioBuffer.sampleRate);
-    console.log('길이:', audioBuffer.length);
-    console.log('재생 시간:', audioBuffer.duration, '초');
     
     const wavBuffer = toWav(audioBuffer);
     const audio = btoa(String.fromCharCode(...new Uint8Array(wavBuffer)));
 
-    // 비디오 프레임 캡처
     let frame = "";
     if (videoRef.current && videoRef.current.readyState === 4) {
         const canvas = document.createElement('canvas');
@@ -208,46 +264,40 @@ const StudentView = () => {
     }
   };
 
+  // 스트리밍 시작 (수정: studentInfo 사용)
   const startStreaming = () => {
     const socket = socketRef.current;
     let recorderIndex = 0;
-    let timeoutIds = []; // timeout ID들을 저장할 배열
+    let timeoutIds = [];
     
-    // cleanup 함수 미리 정의
     const cleanup = () => {
-        console.log('cleanup 실행, timeout 개수:', timeoutIds.length);
-        timeoutIds.forEach(id => {
-            clearTimeout(id);
-            console.log('timeout 정리됨:', id);
-        });
+        timeoutIds.forEach(id => clearTimeout(id));
         timeoutIds = [];
     };
-
-    // stopStreaming에서 사용할 수 있도록 ref에 저장
     cleanupTimeoutsRef.current = cleanup;
 
     if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: 'start_session', user_name: userName, topic: topic }));
+      // 수정된 부분: studentInfo에서 데이터 가져오기
+      socket.send(JSON.stringify({ 
+        type: 'start_session', 
+        user_name: studentInfo?.id || '', 
+        topic: studentInfo?.topic || '' 
+      }));
 
-      // 오디오 MediaRecorder 준비
+      // 나머지 로직은 이전 코드 그대로 유지
       if (mediaStreamRef.current) {
         const audioStream = new MediaStream(mediaStreamRef.current.getAudioTracks());
 
         const createRecorder = (index) => {
           const mediaRecorder = new window.MediaRecorder(audioStream, { mimeType: 'audio/webm' });
           mediaRecorder.ondataavailable = async (e) => {
-            console.log('데이터 사용 가능:', e.data.size); // 디버깅용
             if (e.data.size > 0) {
               try{
                 await processAudioChunk(e.data);
               } catch (error) {
-                console.error('Recorder ${index} 오류:', error);
+                console.error(`Recorder ${index} 오류:`, error);
               }
             }
-          };
-          // 1초마다 ondataavailable 발생, 녹음은 계속 이어짐
-          mediaRecorder.onstop = () => {
-            console.log(`Recorder ${index} 정지됨`);
           };
           return mediaRecorder;
         };
@@ -256,54 +306,38 @@ const StudentView = () => {
           recorderIndex++;
           nextRecorderRef.current = createRecorder(recorderIndex);
 
-          // timeout ID를 배열에 저장
           const timeoutId1 = setTimeout(() => {
               if (nextRecorderRef.current && nextRecorderRef.current.state === 'inactive') {
                   nextRecorderRef.current.start();
-                  console.log(`Recorder ${recorderIndex} 시작됨`);
               }
           }, 900);
-          timeoutIds.push(timeoutId1); // 배열에 추가
+          timeoutIds.push(timeoutId1);
         
-          // 1초 후 현재 recorder 정지하고 교체
           const timeoutId2 = setTimeout(() => {
               if (currentRecorderRef.current && currentRecorderRef.current.state === 'recording') {
                   currentRecorderRef.current.stop();
               }
               currentRecorderRef.current = nextRecorderRef.current;
               nextRecorderRef.current = null;
-              
-              // 다음 사이클 준비
               startNextRecorder();
           }, 1000);
           timeoutIds.push(timeoutId2);
         };
       
-        // 첫 번째 recorder 시작
         currentRecorderRef.current = createRecorder(recorderIndex);
         currentRecorderRef.current.start();
-        console.log(`Recorder ${recorderIndex} 시작됨`);
-        
-        // 다음 recorder 준비
         startNextRecorder();
       }
-    };
+    }
   };
 
+  // 스트리밍 중지 (이전 코드 그대로)
   const stopStreaming = () => {
-    // 1. 데이터 전송 중지
-    if (streamIntervalRef.current) {
-      clearInterval(streamIntervalRef.current);
-      streamIntervalRef.current = null;
-    }
-
-    // 1. 모든 timeout 정리 (가장 중요!)
     if (cleanupTimeoutsRef.current) {
         cleanupTimeoutsRef.current();
         cleanupTimeoutsRef.current = null;
     }
 
-    // 3. 모든 MediaRecorder 중지 (듀얼이므로 둘 다 체크)
     if (currentRecorderRef.current && currentRecorderRef.current.state === 'recording') {
         currentRecorderRef.current.stop();
         currentRecorderRef.current = null;
@@ -313,41 +347,102 @@ const StudentView = () => {
         nextRecorderRef.current = null;
     }
 
-    // 4. 카메라 스트림 중지
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(track => track.stop());
       mediaStreamRef.current = null;
     }
     
-    // 5. 백엔드에 세션 종료 메시지 전송
     const socket = socketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
-        console.log('백엔드로 end_session 메시지를 전송합니다.');
         socket.send(JSON.stringify({ type: 'end_session' }));
     }
 
-    // 4. UI 상태를 로딩으로 즉시 변경
     setIsStreaming(false);
     setPhase('loading_feedback');
   };
-  
-  const handleSendMessage = (userMessage) => {
-    const newMessages = [...messages, { sender: 'user', text: userMessage }];
-    setMessages(newMessages);
-    const botResponse = { sender: 'llm', text: "죄송합니다. 채팅 기능은 현재 개발 중입니다." };
-    setMessages([...newMessages, botResponse]);
+
+  const setupChat = (mode) => {
+    if (mode === 'test') {
+      setMessages([{ sender: 'llm', text: "테스트 기능은 현재 개발 중입니다." }]);
+      setPhase('test');
+    } else if (mode === 'feedback_chat') {
+      setMessages([{ 
+        sender: 'llm', 
+        text: `안녕하세요, ${studentInfo?.id}님! 저는 여러분의 학습을 도와드리는 AI 교사입니다. 방금 완료하신 '${studentInfo?.topic}' 학습에 대해 분석한 결과를 바탕으로 궁금한 점이나 어려웠던 부분에 대해 자세히 설명드릴 수 있습니다. 어떤 것이 궁금하신가요?` 
+      }]);
+      setPhase('feedback_chat');
+    }
   };
+  
+  const handleSendMessage = async (userMessage) => {
+  const newMessages = [...messages, { sender: 'user', text: userMessage }];
+  setMessages(newMessages);
+  
+  if (sessionId) {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          session_id: sessionId,
+          message: userMessage,
+          user_name: studentInfo?.id || '학생',
+          topic: studentInfo?.topic || '경영정보시스템'
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        const aiMessage = { sender: 'llm', text: data.response };
+        setMessages(prevMessages => [...prevMessages, aiMessage]);
+      } else {
+        const errorMessage = { 
+          sender: 'llm', 
+          text: "답변 생성에 문제가 발생했습니다. 다시 시도해주세요." 
+        };
+        setMessages(prevMessages => [...prevMessages, errorMessage]);
+      }
+      
+    } catch (error) {
+      console.error('채팅 API 호출 오류:', error);
+      const fallbackMessage = { 
+        sender: 'llm', 
+        text: "네트워크 연결에 문제가 있습니다. 다시 시도해주세요." 
+      };
+      setMessages(prevMessages => [...prevMessages, fallbackMessage]);
+    }
+  } else {
+    const fallbackResponse = { 
+      sender: 'llm', 
+      text: "세션 정보가 없습니다. 학습을 다시 진행해주세요." 
+    };
+    setMessages([...newMessages, fallbackResponse]);
+  }
+};
 
   if (error) {
       return <div className="text-center p-8 bg-red-100 text-red-700 rounded-xl shadow-lg w-full"><b>오류:</b> {error}</div>
   }
 
+  // phase별 렌더링
   switch (phase) {
+    case 'login':
+      return <LoginScreen onLogin={handleLogin} />;
+
     case 'camera_setup':
       return (
         <div className="text-center p-8 bg-white rounded-xl shadow-lg w-full">
+          <div className="text-left mb-4 bg-gray-100 p-3 rounded-lg">
+            <p className="text-sm text-gray-600"><strong>회원번호:</strong> {studentInfo?.id}</p>
+            <p className="text-sm text-gray-600"><strong>강의주제:</strong> {studentInfo?.topic}</p>
+          </div>
+          
           <h2 className="text-3xl font-bold text-gray-800 mb-4">학습 준비</h2>
-          <p className="text-gray-600 mb-6">카메라가 켜지면 학습을 시작해주세요. 학습 중 여러분의 모습을 분석합니다.</p>
+          <p className="text-gray-600 mb-6">카메라가 켜지면 학습을 시작해주세요.</p>
+          
           <div className="relative w-full">
             <video ref={videoRef} autoPlay muted className="w-full bg-black aspect-video rounded-lg mb-6 transform -scale-x-100"></video>
             {isStreaming && 
@@ -357,29 +452,11 @@ const StudentView = () => {
                 </div>
             }
           </div>
-          {!isStreaming && (
-            <div className="mb-6 flex flex-col items-center gap-3">
-              <input
-                type="text"
-                placeholder="이름을 입력하세요"
-                className="p-3 border-2 border-gray-200 rounded-lg w-64"
-                value={userName}
-                onChange={e => setUserName(e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder="학습 주제를 입력하세요"
-                className="p-3 border-2 border-gray-200 rounded-lg w-64"
-                value={topic}
-                onChange={e => setTopic(e.target.value)}
-              />
-            </div>
-          )}
+          
           {!isStreaming ? (
             <button
                 onClick={startStreaming}
                 className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-8 rounded-lg text-lg transition-transform transform hover:scale-105"
-                disabled={!userName || !topic} // 입력값 없으면 비활성화
             > 학습 시작 </button>
           ) : (
             <button
@@ -389,6 +466,7 @@ const StudentView = () => {
           )}
         </div>
       );
+
     case 'loading_feedback':
         return (
             <div className="text-center p-8 bg-white rounded-xl shadow-lg animate-pulse">
@@ -396,6 +474,7 @@ const StudentView = () => {
               <p className="text-gray-600 mb-8">학습 데이터를 분석하고 있습니다. 잠시만 기다려주세요.</p>
             </div>
         );
+
     case 'choice':
       return (
         <div className="text-center p-8 bg-white rounded-xl shadow-lg animate-fade-in">
@@ -411,12 +490,20 @@ const StudentView = () => {
           </div>
         </div>
       );
+
     case 'feedback_summary':
-        if (!finalReport) return <div className="text-center p-8">피드백 데이터가 없습니다.</div>;
         return (
             <div className="p-8 bg-white rounded-xl shadow-lg w-full animate-fade-in">
-                <h2 className="text-3xl font-bold text-gray-800 mb-6 text-center">학습 피드백 리포트</h2>
-                {finalReport.llm_report && 
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-3xl font-bold text-gray-800">학습 피드백 리포트</h2>
+                    <button
+                        onClick={() => setPhase('choice')}
+                        className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-lg"
+                    >
+                        ← 이전으로
+                    </button>
+                </div>
+                {finalReport?.llm_report && 
                     <DashboardCard title="🤖 AI 종합 피드백" className="mt-6">
                         <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: finalReport.llm_report }} />
                     </DashboardCard>
@@ -428,14 +515,29 @@ const StudentView = () => {
                 </div>
             </div>
         );
+
     case 'test':
     case 'feedback_chat':
-      return <ChatWindow messages={messages} onSendMessage={handleSendMessage} />;
+      return (
+        <div className="w-full">
+          <div className="text-right mb-2">
+            <button
+              onClick={() => setPhase('choice')}
+              className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-lg"
+            >
+              ← 이전으로
+            </button>
+          </div>
+          <ChatWindow messages={messages} onSendMessage={handleSendMessage} />
+        </div>
+      );
+
     default:
       return null;
   }
 };
 
+// 교사 뷰 (기존 그대로)
 const TeacherView = () => {
   const { lowEngagementTopics, lowEngagementTimes, llmSolution } = mockTeacherData;
   return (
@@ -476,10 +578,9 @@ const TeacherView = () => {
   );
 };
 
-
-// --- 메인 앱 컴포넌트 ---
+// 메인 앱
 function App() {
-  const [view, setView] = useState('student'); // 'student' or 'teacher'
+  const [view, setView] = useState('student');
 
   return (
     <div className="bg-gray-100 min-h-screen flex flex-col items-center justify-center font-sans p-4">
@@ -497,7 +598,7 @@ function App() {
           교사 뷰
         </button>
       </div>
-      <div className="w-full max-w-4xl">
+      <div className="w-full max-w-4xl flex items-center justify-center">
         {view === 'student' ? <StudentView /> : <TeacherView />}
       </div>
     </div>

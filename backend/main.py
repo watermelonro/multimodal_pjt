@@ -11,6 +11,7 @@ from queue import Queue
 import queue
 import threading
 import time
+from pydantic import BaseModel
 
 import torch
 from PIL import Image
@@ -30,7 +31,7 @@ from feedback_generator import GenerateFeedback
 from data_process import analyze_concentration_changes
 from wav_process import FastAudioPreprocessor, preprocess_audio_data
 from merge_wav import merge_wav_chunks_from_buffer as merge
-
+from llm_prompt import LLMPipeline
 # --- 로깅 설정 ---
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -43,7 +44,7 @@ app = FastAPI()
 # --- CORS 미들웨어 설정 ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # 개발 중에는 모든 오리진 허용
+    allow_origins=["*"],  # 개발 중에는 모든 오리진 허용
     allow_credentials=True,
     allow_methods=["*"],  # 모든 HTTP 메소드 허용
     allow_headers=["*"],  # 모든 헤더 허용
@@ -105,6 +106,12 @@ class SessionManager:
 
 session_manager = SessionManager()
 
+class ChatRequest(BaseModel):
+    session_id: str
+    message: str
+    user_name: str = "학생"
+    topic: str = "경영정보시스템"
+    
 # --- 핵심 분석기 클래스 ---
 class LectureAnalyzer:
     """모든 모델을 총괄하고 데이터 분석 파이프라인을 실행"""
@@ -120,7 +127,6 @@ class LectureAnalyzer:
             self.e2e_model.to(self.device)
             model_inference.warmup_model(self.face_box_model, self.e2e_model)
             logger.info("✅ 멀티모달 추론 모델 로드 완료")
-
         except Exception as e:
             logger.critical(f"❌ 모델 로딩 실패: {e}", exc_info=True)
             raise RuntimeError(
@@ -216,6 +222,8 @@ class LectureAnalyzer:
 # --- 전역 분석기 인스턴스 생성 ---
 try:
     analyzer = LectureAnalyzer()
+    llm_pipeline = LLMPipeline()
+    logger.info("✅ LLM Pipeline 로드 완료")
 except RuntimeError as e:
     logger.critical(f"분석기 인스턴스 생성 실패. 서버를 종료합니다. 오류: {e}")
     analyzer = None
@@ -548,7 +556,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     # --- End of counter logic ---
 
                     await asyncio.sleep(0.01)  # Increased sleep duration
-
+            
     except WebSocketDisconnect:
         logger.info("웹소켓 연결이 끊어졌습니다.")
     except Exception as e:
@@ -558,7 +566,31 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.info(f"비정상 종료로 인한 세션 정리: {session_id}")
             session_manager.remove_session(session_id)
 
-
+@app.post("/api/chat")
+async def chat_with_teacher(request: ChatRequest):
+    try:
+        # MongoDB에서 세션 데이터 조회
+        doc = collection.find_one({"session_id": request.session_id}, {"_id": 0, "results": 1})
+        
+        if not doc:
+            return {"success": False, "response": "세션 데이터를 찾을 수 없습니다."}
+        
+        results = doc.get("results", [])
+        
+        # RAG Pipeline 사용
+        ai_response = llm_pipeline.generate_chat_response(
+            user_message=request.message,
+            user_name=request.user_name,
+            topic=request.topic,
+            analysis_results=results
+        )
+        
+        return {"success": True, "response": ai_response}
+        
+    except Exception as e:
+        logger.error(f"채팅 API 오류: {e}")
+        return {"success": False, "response": "답변 생성 중 오류가 발생했습니다."}
+    
 @app.get("/health")
 def health_check():
     return {

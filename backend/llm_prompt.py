@@ -138,3 +138,65 @@ class LLMPipeline:
             print(f"답변 생성 실패: {str(e)}")
             return None
         return answer
+    
+    def generate_chat_response(self, user_message: str, user_name: str, 
+                              topic: str, analysis_results: list) -> str:
+        """교재 기반 학습 도움 + 개인화"""
+        # 채팅 전용 프롬프트
+        chat_template = """당신은 {topic} 교재를 완벽히 숙지한 친근한 AI 튜터입니다. {user_name}님의 질문에 교재 내용을 바탕으로 정확하고 이해하기 쉽게 답변해주세요.
+
+
+        **학습 분석 정보:**
+        {rag_result}
+
+        **질문 관련 교재 내용:**
+        {rag_result}
+
+        **개인화 참고사항:**
+        {personalization_hint}
+
+        **학생 질문:** {user_message}
+
+        **답변 지침:**
+        1. 교재 내용을 중심으로 정확한 답변 제공
+        2. 20대 대학생에게 적합한 친근한 말투 사용
+        3. 개인화 참고사항이 있다면 자연스럽게 언급
+        4. 3-4문장으로 간결하고 명확하게 설명
+        5. 필요시 교재 페이지 번호 언급
+
+        **답변:**"""
+
+        # 1. RAG 검색 (주요)
+        rag_result = self.rag.ask_question(user_message, topic, k=3, show_sources=False)
+        rag_text = str(rag_result.get("answer", "해당 내용을 교재에서 찾기 어렵네요."))
+        
+        # 2. 개인화 힌트 (보조)
+        personalization_hint = self._get_personalization_hint(analysis_results, user_name)
+        
+        # 3. 응답 생성
+        chat_prompt = ChatPromptTemplate.from_template(chat_template)
+        chat_chain = chat_prompt | self.llm | StrOutputParser()
+        
+        try:
+            response = chat_chain.invoke({
+                "user_name": user_name,
+                "topic": topic,
+                "user_message": user_message,
+                "rag_result": rag_text,
+                "personalization_hint": personalization_hint
+            })
+            return response
+        except Exception as e:
+            return "답변 생성 중 오류가 발생했습니다. 다시 질문해주세요."
+
+    def _get_personalization_hint(self, analysis_results, user_name):
+        """질문과 관련된 개인화 힌트 생성"""
+        if not analysis_results:
+            return "개인화 정보 없음"
+        
+        # 집중도가 낮았던 구간이 많다면
+        low_focus_count = sum(1 for r in analysis_results if r.get('result', {}).get('str') == '낮음')
+        if low_focus_count > len(analysis_results) * 0.3:
+            return f"{user_name}님이 이전 학습에서 일부 어려움을 겪었던 부분과 관련될 수 있음"
+        
+        return "전반적으로 잘 이해하고 있는 학습자"

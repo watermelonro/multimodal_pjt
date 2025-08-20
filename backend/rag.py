@@ -62,7 +62,7 @@ class RAGPipeline:
     def _create_rag_chain(self):
         """RAG 체인 생성"""
 
-        # 프롬프트 템플릿 정의 -> 민서, 종원오빠가?
+        # 프롬프트 템플릿 정의 
         template = """You are an {topic} specialist. Give me MOST RELATIVE, ACCURATE TOPIC WORD based on textbook content provided.
 
 **GUIDELINES:**

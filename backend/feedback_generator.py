@@ -5,7 +5,6 @@ import base64
 
 llm_model = LLMPipeline()
 
-
 class GenerateFeedback:
     def __init__(self):
         pass
