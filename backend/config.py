@@ -10,6 +10,8 @@ UPSTAGE_API_KEY = os.getenv("UPSTAGE_API_KEY")
 if not UPSTAGE_API_KEY:
     print("Warning: UPSTAGE_API_KEY is not set in the .env file.")
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 # --- Paths ---
 # 프로젝트의 루트 디렉토리
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

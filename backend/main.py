@@ -12,6 +12,7 @@ import queue
 import threading
 import time
 from pydantic import BaseModel
+import openai  # <-- OpenAI 라이브러리 임포트
 
 import torch
 from PIL import Image
@@ -118,6 +119,11 @@ class LectureAnalyzer:
 
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # OpenAI 클라이언트 초기화
+        if not config.OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+        self.openai_client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
+        
         logger.info(f"분석기 초기화 중... (Device: {self.device})")
         try:
             self.pad = FastAudioPreprocessor(audio_conf)
@@ -132,6 +138,20 @@ class LectureAnalyzer:
             raise RuntimeError(
                 "필수 모델 로딩에 실패하여 서버를 시작할 수 없습니다."
             ) from e
+
+    def _transcribe_audio(self, audio_path: str) -> str:
+        """오디오 파일을 Whisper API를 통해 텍스트로 변환"""
+        try:
+            with open(audio_path, "rb") as audio_file:
+                transcription = self.openai_client.audio.transcriptions.create(
+                    model="whisper-1", 
+                    file=audio_file
+                )
+            logger.info(f"Whisper 변환 완료: {transcription.text}")
+            return transcription.text
+        except Exception as e:
+            logger.error(f"Whisper API 호출 중 오류 발생: {e}")
+            return "음성 인식 중 오류가 발생했습니다."
 
     def process_chunk(
         self, frame_data: bytes, audio_path: str, last_timestamp: float
@@ -152,6 +172,9 @@ class LectureAnalyzer:
                 )
             )
 
+            # 2-1. Whisper로 음성->텍스트 변환
+            transcribed_text = self._transcribe_audio(audio_path)
+
             # 3. 결과 구조화
             start_time = last_timestamp - config.TIMESTEP
             result = {
@@ -159,7 +182,7 @@ class LectureAnalyzer:
                 "result": {"num": pred_num, "str": pred_str},
                 "pose": {"yaw": float(yaw), "pitch": float(pitch)},
                 "noise": {"num": noise_num, "str": noise_str},
-                "text": f"({self._format_time(start_time)}~ {self._format_time(last_timestamp)}지점의 강의 내용) ",  # Whisper 연동 시 실제 텍스트로 대체
+                "text": transcribed_text, # Whisper로 변환된 실제 텍스트로 대체
             }
             return result
 
