@@ -19,15 +19,20 @@ const mockStudentFeedback = {
 
 // --- 강의 주제 목록 ---
 const lectureTopics = [
-    "CHAPTER 1: 경영 정보 시스템",
-    "CHAPTER 2: 의사 결정과 프로세스",
-    "CHAPTER 3: e-비즈니스",
-    "CHAPTER 4: 윤리와 정보 보호",
-    "CHAPTER 5: 기반구조",
-    "CHAPTER 6: 데이터",
-    "CHAPTER 7: 네트워크",
-    "CHAPTER 8: 전사적 애플리케이션",
-    "CHAPTER 9: 시스템 개발과 프로젝트 관리",
+    "CHAPTER 1: 정보의 가치",
+    "CHAPTER 2: 정보 시스템의 개요",
+    "CHAPTER 3: 정보평가",
+    "CHAPTER 4: 정보를 통한 전략적 가치 창출",
+    "CHAPTER 5: 정보 저장 및 조직화",
+    "CHAPTER 6: 경영 의사결정을 위한 정보 분석",
+    "CHAPTER 7: 정보 전송",
+    "CHAPTER 8: 정보 보안",
+    "CHAPTER 9: 기밀 유지 및 정보 프라이버시",
+    "CHAPTER 10: 정보 시스템 개발",
+    "CHAPTER 11: 정보 기반 비즈니스 프로세스",
+    "CHAPTER 12: 전사적 정보 시스템",
+    "CHAPTER 13: e–비즈니스의 정보",
+    "CHAPTER 14: 경영 의사결정을 위한 정보와 지식",
 ];
 
 
