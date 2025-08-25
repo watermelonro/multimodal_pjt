@@ -4,6 +4,13 @@ from langchain_upstage import ChatUpstage
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.output_parser import StrOutputParser
 from rag import RAGPipeline
+import logging
+
+# --- 로깅 설정 ---
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -152,9 +159,6 @@ class LLMPipeline:
         **질문 관련 교재 내용 (RAG 검색 결과):**
         {rag_result}
 
-        **개인화 참고사항:**
-        {personalization_hint}
-
         **학생 질문:** {user_message}
 
         **답변 지침:**
@@ -170,10 +174,7 @@ class LLMPipeline:
         rag_result = self.rag.ask_question(user_message, topic, k=3, show_sources=False)
         rag_text = str(rag_result.get("answer", "해당 내용을 교재에서 찾기 어렵네요."))
         
-        # 2. 개인화 힌트 (보조)
-        personalization_hint = self._get_personalization_hint(analysis_results, user_name)
-        
-        # 3. 응답 생성
+        # 2. 응답 생성
         chat_prompt = ChatPromptTemplate.from_template(chat_template)
         chat_chain = chat_prompt | self.llm | StrOutputParser()
         
@@ -183,8 +184,7 @@ class LLMPipeline:
                 "topic": topic,
                 "user_message": user_message,
                 "final_report": final_report, # 수정: 최종 리포트 추가
-                "rag_result": rag_text,
-                "personalization_hint": personalization_hint
+                "rag_result": rag_text
             })
             return response
         except Exception as e:

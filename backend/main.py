@@ -274,7 +274,7 @@ class SessionAudioBuffer:
                 task = self.model_queue.get(timeout=1)
                 if task is None:  # 종료 신호
                     if self.batch_buffer:
-                        asyncio.run(self._process_final_batch())
+                        asyncio.run(self._process_batch())
                     break
                 
                 # 배치에 추가
