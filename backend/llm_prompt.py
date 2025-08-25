@@ -140,16 +140,16 @@ class LLMPipeline:
         return answer
     
     def generate_chat_response(self, user_message: str, user_name: str, 
-                              topic: str, analysis_results: list) -> str:
+                              topic: str, analysis_results: list, final_report: str) -> str:
         """교재 기반 학습 도움 + 개인화"""
         # 채팅 전용 프롬프트
         chat_template = """당신은 {topic} 교재를 완벽히 숙지한 친근한 AI 튜터입니다. {user_name}님의 질문에 교재 내용을 바탕으로 정확하고 이해하기 쉽게 답변해주세요.
 
 
-        **학습 분석 정보:**
-        {rag_result}
+        **지난 학습에 대한 종합 리포트:**
+        {final_report}
 
-        **질문 관련 교재 내용:**
+        **질문 관련 교재 내용 (RAG 검색 결과):**
         {rag_result}
 
         **개인화 참고사항:**
@@ -160,7 +160,7 @@ class LLMPipeline:
         **답변 지침:**
         1. 교재 내용을 중심으로 정확한 답변 제공
         2. 20대 대학생에게 적합한 친근한 말투 사용
-        3. 개인화 참고사항이 있다면 자연스럽게 언급
+        3. 종합 리포트와 개인화 참고사항을 자연스럽게 언급
         4. 3-4문장으로 간결하고 명확하게 설명
         5. 필요시 교재 페이지 번호 언급
 
@@ -182,6 +182,7 @@ class LLMPipeline:
                 "user_name": user_name,
                 "topic": topic,
                 "user_message": user_message,
+                "final_report": final_report, # 수정: 최종 리포트 추가
                 "rag_result": rag_text,
                 "personalization_hint": personalization_hint
             })
