@@ -140,39 +140,47 @@ class LLMPipeline:
         return answer
     
     def generate_chat_response(self, user_message: str, user_name: str, 
-                              topic: str, analysis_results: list) -> str:
-        """교재 기반 학습 도움 + 개인화"""
-        # 채팅 전용 프롬프트
-        chat_template = """당신은 {topic} 교재를 완벽히 숙지한 친근한 AI 튜터입니다. {user_name}님의 질문에 교재 내용을 바탕으로 정확하고 이해하기 쉽게 답변해주세요.
+                              topic: str, analysis_results: list, final_report: str) -> str:
+        """교재, 학습 분석 리포트, 강의 내용을 모두 참고하여 개인화된 답변을 생성합니다."""
+        
+        # 1. 컨텍스트 생성
+        # (1) 전체 강의 스크립트 생성
+        lecture_transcript = " ".join([res.get('text', '') for res in analysis_results if res.get('text')])
+        if not lecture_transcript.strip():
+            lecture_transcript = "(기록된 강의 내용 없음)"
 
+        # (2) RAG를 위한 컨텍스트 구성
+        # 학생 질문, 전체 강의 내용, 최종 분석 리포트를 모두 합쳐서 컨텍스트로 사용
+        rag_context = f"""- 학생 질문: {user_message}
+- 전체 강의 내용: {lecture_transcript}
+- 학생 학습 분석 리포트: {final_report}"""
 
-        **학습 분석 정보:**
-        {rag_result}
+        # (3) 교재 내용 검색 (RAG)
+        rag_search_result = self.rag.ask_question(rag_context, topic, k=3, show_sources=False)
+        relevant_docs = str(rag_search_result.get("answer", "참고할 만한 교재 내용 없음"))
 
-        **질문 관련 교재 내용:**
-        {rag_result}
+        # 2. LLM에 전달할 최종 프롬프트 템플릿 정의
+        chat_template = """당신은 {topic} 과목을 가르치는 교사이며, 학생인 {user_name}님의 질문에 답변해야 합니다.
+        답변을 위해 아래의 세 가지 정보를 모두 활용하세요.
 
-        **개인화 참고사항:**
-        {personalization_hint}
+        **정보 1: 학생의 질문**
+        {user_message}
 
-        **학생 질문:** {user_message}
+        **정보 2: 학생의 학습 태도 및 성과에 대한 최종 분석 리포트**
+        {final_report}
+
+        **정보 3: 학생이 질문한 내용과 관련 있는 강의 내용 및 교재 정보**
+        {relevant_docs}
 
         **답변 지침:**
-        1. 교재 내용을 중심으로 정확한 답변 제공
-        2. 20대 대학생에게 적합한 친근한 말투 사용
-        3. 개인화 참고사항이 있다면 자연스럽게 언급
-        4. 3-4문장으로 간결하고 명확하게 설명
-        5. 필요시 교재 페이지 번호 언급
+        1. 위의 모든 정보를 종합적으로 고려하여, 학생의 질문에 대해 깊이 있고 개인화된 답변을 제공하세요.
+        2. 학생이 강의 내용을 잘 이해하지 못했다면, 교재 내용을 바탕으로 쉽게 설명해주세요.
+        3. 학생이 자신의 학습 태도(집중도 등)에 대해 질문했다면, 분석 리포트를 근거로 설명해주세요.
+        4. 20대 대학생에게 적합한 친근하고 격려하는 말투를 사용하세요.
+        5. 3-5 문장으로 간결하지만 명확하게 답변해주세요.
 
         **답변:**"""
 
-        # 1. RAG 검색 (주요)
-        rag_result = self.rag.ask_question(user_message, topic, k=3, show_sources=False)
-        rag_text = str(rag_result.get("answer", "해당 내용을 교재에서 찾기 어렵네요."))
-        
-        # 2. 개인화 힌트 (보조)
-        personalization_hint = self._get_personalization_hint(analysis_results, user_name)
-        
         # 3. 응답 생성
         chat_prompt = ChatPromptTemplate.from_template(chat_template)
         chat_chain = chat_prompt | self.llm | StrOutputParser()
@@ -182,21 +190,10 @@ class LLMPipeline:
                 "user_name": user_name,
                 "topic": topic,
                 "user_message": user_message,
-                "rag_result": rag_text,
-                "personalization_hint": personalization_hint
+                "final_report": final_report if final_report else "(생성된 리포트 없음)",
+                "relevant_docs": relevant_docs
             })
             return response
         except Exception as e:
+            logger.error(f"채팅 응답 생성 중 오류: {e}")
             return "답변 생성 중 오류가 발생했습니다. 다시 질문해주세요."
-
-    def _get_personalization_hint(self, analysis_results, user_name):
-        """질문과 관련된 개인화 힌트 생성"""
-        if not analysis_results:
-            return "개인화 정보 없음"
-        
-        # 집중도가 낮았던 구간이 많다면
-        low_focus_count = sum(1 for r in analysis_results if r.get('result', {}).get('str') == '낮음')
-        if low_focus_count > len(analysis_results) * 0.3:
-            return f"{user_name}님이 이전 학습에서 일부 어려움을 겪었던 부분과 관련될 수 있음"
-        
-        return "전반적으로 잘 이해하고 있는 학습자"
