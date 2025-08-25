@@ -48,7 +48,7 @@ def analyze_concentration_changes(data: List[Dict]) -> Dict[str, Any]:
     avg_concentration = round(statistics.mean(total_concentration), 2)
     avg_yaw = round(statistics.mean(total_yaw), 2)
     avg_pitch = round(statistics.mean(total_pitch), 2)
-    dominant_noise = max(noise_counts, key=noise_counts.get)
+    dominant_noise = max(noise_counts, key=noise_counts.get) # type: ignore
 
     # 집중도 변화점 찾기 (2점 이상 변화 또는 집중/비집중 상태 전환)
     change_points = []
@@ -224,7 +224,7 @@ def get_dominant_noise_in_segment(segment_data: List[Dict]) -> str:
         noise_label = noise_labels.get(noise_num, "알수없음")
         noise_counts[noise_label] = noise_counts.get(noise_label, 0) + 1
 
-    return max(noise_counts, key=noise_counts.get)
+    return max(noise_counts, key=noise_counts.get) # type: ignore
 
 
 def calculate_focus_ratio(segments: List[Dict]) -> float:

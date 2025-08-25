@@ -37,6 +37,7 @@ lerna-debug.log*
 
 # Temp File
 temp/
+warmup_files/
 *.jpg
 *.ipynb
 *.html

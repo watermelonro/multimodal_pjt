@@ -31,10 +31,13 @@ VECTOR_DB_PATH = os.path.join(DATA_DIR, "vector_store", "경영ᄌ�
 
 # 모델 체크포인트 경로
 MODEL_CHECKPOINT_PATH = os.path.join(
-    MODELS_DIR, "checkpoints_transformer_fusion", "best_model_ast_essentials.pth"
+    MODELS_DIR, "best_model_ast_librosa_bce_essentials.pth"
 )
 
 TEMP_DIR_PATH = os.path.join(PROJECT_ROOT, "temp")
+
+# warmup 폴더 경로
+WARMUP_PATH = os.path.join(PROJECT_ROOT, "warmup_files")
 
 # --- Analysis Parameters ---
 # 클라이언트로부터 수신하는 비디오의 초당 프레임 수 (가정)

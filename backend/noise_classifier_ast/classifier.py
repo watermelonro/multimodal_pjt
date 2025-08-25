@@ -229,10 +229,16 @@ def load_lora_model(base_model, model_path, device, use_dataparallel=True):
 
 def load_model():
     """최고 성능 모델 로드"""
-    base_model = ASTModel(label_dim=6, imagenet_pretrain=False, audioset_pretrain=False, model_size='base384')
+    base_model = ASTModel(label_dim=7, imagenet_pretrain=False, audioset_pretrain=False, model_size='base384')
     module_dir = os.path.dirname(__file__)
-    model_path = os.path.join(module_dir, '../../models/audio_noise_classifier_ast.pth')
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_path = os.path.join(module_dir, '../../models/audio_noise_classifier_ast_bce_librosa.pth')
+    # Determine the device to use
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     return load_lora_model(base_model, model_path, device)
 
 if __name__=="__main__":

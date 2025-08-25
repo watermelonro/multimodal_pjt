@@ -10,7 +10,6 @@ from typing import Dict, Any
 from queue import Queue
 import queue
 import threading
-import time
 from pydantic import BaseModel
 import openai 
 
@@ -32,6 +31,7 @@ from data_process import analyze_concentration_changes
 from wav_process import FastAudioPreprocessor, preprocess_audio_data
 from merge_wav import merge_wav_chunks_from_buffer as merge
 from llm_prompt import LLMPipeline
+
 # --- 로깅 설정 ---
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -59,9 +59,7 @@ collection = db["sessions"]
 
 audio_conf = {
     'num_mel_bins': 128, 
-    'target_length': 1024, 
-    'freqm': 48, 
-    'timem': 192,  
+    'target_length': 1024,
     'dataset': 'aihub_audio_dataset', 
     'mean':-4.2677393, 
     'std':4.5689974
@@ -151,7 +149,7 @@ class LectureAnalyzer:
             pil_image = Image.open(io.BytesIO(frame_data))
             pil_image.save("output.jpg")
             audio_tensor = preprocess_audio_data(self.pad, audio_path)
-            (pred_num, pred_str), (yaw, pitch), (noise_num, noise_str) = (
+            ((pred_num, pred_str), (yaw, pitch), (noise_num, noise_str)), audio = (
                 model_inference.run(
                     self.face_box_model, self.e2e_model, pil_image, audio_tensor
                 )
@@ -346,7 +344,7 @@ class SessionAudioBuffer:
             pil_image = Image.open(io.BytesIO(frame_data))
             pil_image.save("output.jpg")
             audio_tensor = preprocess_audio_data(self.analyzer.pad, audio_path)
-            (pred_num, pred_str), (yaw, pitch), (noise_num, noise_str) = (
+            ((pred_num, pred_str), (yaw, pitch), (noise_num, noise_str)), audio = (
                 model_inference.run(
                     self.analyzer.face_box_model, 
                     self.analyzer.e2e_model, 
