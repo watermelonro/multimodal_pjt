@@ -221,7 +221,17 @@ class LectureAnalyzer:
             except Exception as e:
                 logger.error(f"HTML 리포트 파일 저장 중 오류 발생: {e}")
 
-            # 3. 심층 분석 데이터 (선택 사항이지만 유지)
+            # 3. 생성된 리포트를 DB에 저장하여 채팅에 활용
+            try:
+                collection.update_one(
+                    {"session_id": session_id},
+                    {"$set": {"final_report_html": full_html_report}}
+                )
+                logger.info(f"✅ 최종 리포트를 데이터베이스에 저장했습니다.")
+            except Exception as e:
+                logger.error(f"최종 리포트 데이터베이스 저장 중 오류 발생: {e}")
+
+            # 4. 심층 분석 데이터 (선택 사항이지만 유지)
             sorted_results = sorted(results, key=lambda x: x["timestamp"]["start"])
             insights = analyze_concentration_changes(sorted_results)
             logger.info("✅ 데이터 심층 분석 완료")
@@ -285,9 +295,9 @@ class SessionAudioBuffer:
 
     def _model_worker(self):
         """모델 추론 전용 워커 스레드"""
-        while not self._shutdown:
+        while not self._shutdown or not self.model_queue.empty():
             try:
-                task = self.model_queue.get_nowait()
+                task = self.model_queue.get(timeout=0.1)
                 if task is None:  # 종료 신호
                     break
                 
@@ -307,7 +317,8 @@ class SessionAudioBuffer:
                     logger.info(f"Session {task['session_id']}: 모델 추론 완료 ({processing_time:.2f}초)")
 
                     # MongoDB에 저장
-                    save_result(self.session_id, result)
+                    if result:
+                        save_result(self.session_id, result)
                     
                 except Exception as e:
                     logger.error(f"모델 추론 오류 (Session {task['session_id']}): {e}")
@@ -316,7 +327,8 @@ class SessionAudioBuffer:
                     self._cleanup_wav_file(wav_path)
                 
             except queue.Empty:
-                time.sleep(0.1)
+                if self._shutdown:
+                    break
                 continue
             except Exception as e:
                 logger.error(f"모델 워커 오류: {e}")
@@ -357,7 +369,8 @@ class SessionAudioBuffer:
     async def add_chunk(self, audio_b64: str, frame_b64: str):
         """청크 추가 (완전 논블로킹)"""
         if self._shutdown:
-            return None
+            logger.warning(f"Session {self.session_id}: Shutdown in progress, chunk ignored.")
+            return
             
         try:
             audio_bytes = base64.b64decode(audio_b64)
@@ -378,15 +391,16 @@ class SessionAudioBuffer:
             # 만약 모델이 쉬고 있다면 process 진행
             self._try_start_model_processing()
             
-            return None
-            
         except Exception as e:
             logger.error(f"청크 추가 오류 (Session {self.session_id}): {e}")
-            return None
         
     def _enqueue_for_processing(self):
         """처리할 데이터를 큐에 추가"""
         try:
+            # 마지막 청크일 경우, 버퍼에 남은 모든 데이터를 처리
+            if self._shutdown and self.buffer:
+                logger.info(f"Session {self.session_id}: Finalizing remaining buffer data.")
+            
             processing_data = {
                 "audio_bytes": self.buffer,
                 "frame": self.frame_latest,
@@ -394,23 +408,15 @@ class SessionAudioBuffer:
                 "session_id": self.session_id
             }
             
-            # 논블로킹으로 큐에 추가 (큐가 꽉 차면 가장 오래된 것 제거)
-            try:
-                self.data_queue.put_nowait(processing_data)
-                logger.info(f"Session {self.session_id}: 현재 data_queue 크기 = {self.data_queue.qsize()}")
-            except queue.Full:
-                # 오래된 데이터 제거하고 새 데이터 추가
-                try:
-                    self.data_queue.get_nowait()
-                    self.data_queue.put_nowait(processing_data)
-                    logger.warning(f"Session {self.session_id}: 큐가 가득참, 오래된 데이터 제거")
-                except queue.Empty:
-                    pass
+            self.data_queue.put(processing_data, block=False)
+            logger.info(f"Session {self.session_id}: 현재 data_queue 크기 = {self.data_queue.qsize()}")
             
             # 버퍼 초기화
             self.buffer = b""
             self.frame_latest = None
             
+        except queue.Full:
+            logger.warning(f"Session {self.session_id}: 큐가 가득참, 데이터 처리 지연 가능성 있음")
         except Exception as e:
             logger.error(f"데이터 큐 추가 오류: {e}")
     
@@ -423,14 +429,12 @@ class SessionAudioBuffer:
             return
         
         with self._processing_lock:
-            if self._is_processing:  # 다시 한번 체크
+            if self._is_processing:
                 return
                 
             try:
                 processing_data = self.data_queue.get_nowait()
                 self._is_processing = True
-                
-                # 모델 워커 스레드에게 작업 전달
                 self.model_queue.put(processing_data)
                 logger.info(f"Session {self.session_id}: 모델 처리 작업을 워커 스레드에 전달")
                 
@@ -440,26 +444,35 @@ class SessionAudioBuffer:
                 logger.error(f"모델 처리 시작 오류: {e}")
                 self._is_processing = False
     
-    def cleanup(self):
-        """리소스 정리"""
-        logger.info(f"Session {self.session_id}: 정리 시작")
-        
-        # 종료 플래그 설정
+    def shutdown(self):
+        """Gracefully process remaining data and shut down the worker."""
+        logger.info(f"Session {self.session_id}: Graceful shutdown initiated.")
         self._shutdown = True
-        
-        # 남은 작업들 완료 대기 (최대 10초)
-        remaining_tasks = self.data_queue.qsize()
-        if remaining_tasks > 0:
-            logger.info(f"Session {self.session_id}: {remaining_tasks}개 작업 완료 대기 중...")
-            
-        # 모델 워커 스레드 종료
+
+        # Enqueue any remaining data from the buffer
+        if self.buffer:
+            logger.info(f"Session {self.session_id}: Enqueuing final buffer chunk.")
+            self._enqueue_for_processing()
+
+        # Wait for the data queue to be processed by the model queue
+        while not self.data_queue.empty():
+            self._try_start_model_processing()
+            time.sleep(0.2)
+
+        # Wait for the model processing queue to be empty
+        while not self.model_queue.empty() or self.is_processing():
+            time.sleep(0.2)
+
+        logger.info(f"Session {self.session_id}: All queued tasks processed.")
+
+        # Now, stop the worker thread
         self.model_queue.put(None)
         if self.model_thread.is_alive():
-            self.model_thread.join(timeout=10)
+            self.model_thread.join(timeout=20)
             if self.model_thread.is_alive():
-                logger.warning(f"Session {self.session_id}: 워커 스레드 강제 종료")
-        
-        logger.info(f"Session {self.session_id}: 정리 완료")
+                logger.warning(f"Session {self.session_id}: Worker thread did not terminate gracefully.")
+
+        logger.info(f"Session {self.session_id}: Shutdown complete.")
 
 # 전역 세션 관리
 session_buffers = {}
@@ -478,42 +491,63 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            logger.info(f"세션 {session_id}: 메시지 수신 대기 중...")
             data = await websocket.receive_text()
-            logger.info(f"세션 {session_id}: 메시지 수신됨. 데이터 길이: {len(data)}")
             message = json.loads(data)
             msg_type = message.get("type")
-            logger.info(f"세션 {session_id}: {msg_type} 메시지 수신")
+            
+            if session_id:
+                logger.info(f"세션 {session_id}: {msg_type} 메시지 수신")
+            else:
+                logger.info(f"세션 없음: {msg_type} 메시지 수신")
 
-            # [수정] 종료 요청을 다른 어떤 메시지보다 먼저 확인하여 레이스 컨디션을 방지합니다.
-            if msg_type == "end_session":
+            if msg_type == "start_session":
+                user_name = message.get("user_name", "학생")
+                topic = message.get("topic", "학습 주제")
+                session_id = session_manager.create_session(user_name, topic)
+                session_buffers[session_id] = SessionAudioBuffer(session_id, analyzer)
+                await websocket.send_json(
+                    {"type": "session_started", "session_id": session_id}
+                )
+
+            elif msg_type == "data_chunk":
+                if session_id and session_id in session_buffers:
+                    buffer = session_buffers[session_id]
+                    await buffer.add_chunk(
+                        message.get("audio"),
+                        message.get("frame"),
+                    )
+                else:
+                    logger.warning(f"Invalid or missing session_id for data_chunk.")
+
+            elif msg_type == "end_session":
                 logger.info(f"세션 종료 요청 받음: {session_id}")
                 if not session_id:
-                    await websocket.send_json(
-                        {"type": "error", "message": "세션이 시작되지 않았습니다."}
-                    )
+                    await websocket.send_json({"type": "error", "message": "세션이 시작되지 않았습니다."})
                     break
 
+                # 1. Gracefully shut down the session buffer
+                if session_id in session_buffers:
+                    buffer = session_buffers[session_id]
+                    logger.info(f"세션 버퍼 종료 시작: {session_id}")
+                    await asyncio.to_thread(buffer.shutdown)
+                    logger.info(f"세션 버퍼 종료 완료: {session_id}")
+                    del session_buffers[session_id]
+
+                # 2. Generate the final report
                 session = session_manager.get_session(session_id)
                 if session:
                     logger.info(f"세션 '{session_id}'의 리포트 생성 시작...")
                     await websocket.send_json(
-                        {
-                            "type": "report_generating",
-                            "message": "최종 리포트를 생성 중입니다...",
-                        }
+                        {"type": "report_generating", "message": "최종 리포트를 생성 중입니다..."}
                     )
-
                     try:
                         final_report = await asyncio.to_thread(
                             analyzer.generate_final_report, session, session_id
                         )
-
                         logger.info(f"리포트 생성 완료, 전송 시작: {session_id}")
                         await websocket.send_json(
                             {"type": "final_report", "data": final_report}
                         )
-
                     except Exception as e:
                         logger.error(f"리포트 생성 중 에러 발생: {e}", exc_info=True)
                         await websocket.send_json(
@@ -521,91 +555,49 @@ async def websocket_endpoint(websocket: WebSocket):
                         )
                 else:
                     logger.warning(f"종료 요청된 세션을 찾을 수 없음: {session_id}")
-                    await websocket.send_json(
-                        {"type": "error", "message": "세션을 찾을 수 없습니다."}
-                    )
 
-                # 모든 작업 완료 후 세션 정리
+                # 3. Clean up session from manager
                 session_manager.remove_session(session_id)
-
-                # 루프를 안전하게 종료
-                break
-
-            elif msg_type == "start_session":
-                user_name = message.get("user_name", "학생")
-                topic = message.get("topic", "학습 주제")
-                session_id = session_manager.create_session(user_name, topic)
-                await websocket.send_json(
-                    {"type": "session_started", "session_id": session_id}
-                )
-
-            elif msg_type == "data_chunk":
-                if not session_id:
-                    await websocket.send_json(
-                        {"type": "error", "message": "세션이 시작되지 않았습니다."}
-                    )
-                    continue
-
-                session = session_manager.get_session(session_id)
-                if session:
-                    if session_id not in session_buffers:
-                        session_buffers[session_id] = SessionAudioBuffer(session_id, analyzer)
-
-                    buffer = session_buffers[session_id]
-
-                    await buffer.add_chunk(
-                        message.get("audio"),
-                        message.get("frame"),
-                    )
-
-                    # --- Add counter for less frequent feedback ---
-                    if "feedback_counter" not in session:
-                        session["feedback_counter"] = 0
-                    session["feedback_counter"] += 1
-
-                    if (
-                        session["feedback_counter"] % 5 == 0
-                    ):  # Send feedback every 10 data_chunks
-                        doc = collection.find_one({"session_id": session_id}, {"_id": 0, "results": 1})
-                        results = doc.get("results", []) if doc else []
-                        if results:
-                            await websocket.send_json(
-                                {
-                                    "type": "realtime_feedback",
-                                    "concentration": results[-1]['result']['str'],
-                                    "noise": results[-1]['noise']['str'],
-                                }
-                            )
-                    # --- End of counter logic ---
-
-                    await asyncio.sleep(0.01)  # Increased sleep duration
+                logger.info(f"웹소켓 루프를 종료합니다: {session_id}")
+                break  # End the while loop
             
     except WebSocketDisconnect:
-        logger.info("웹소켓 연결이 끊어졌습니다.")
+        logger.info(f"웹소켓 연결이 끊어졌습니다: {session_id}")
     except Exception as e:
         logger.error(f"웹소켓 오류 발생: {e}", exc_info=True)
     finally:
-        if session_id and session_manager.get_session(session_id):
-            logger.info(f"비정상 종료로 인한 세션 정리: {session_id}")
-            session_manager.remove_session(session_id)
+        # Final cleanup on disconnect
+        if session_id:
+            if session_id in session_buffers:
+                logger.info(f"비정상 종료로 인한 세션 버퍼 정리: {session_id}")
+                # Note: a full shutdown might be too slow here
+                del session_buffers[session_id]
+            if session_manager.get_session(session_id):
+                logger.info(f"비정상 종료로 인한 세션 매니저 정리: {session_id}")
+                session_manager.remove_session(session_id)
 
 @app.post("/api/chat")
 async def chat_with_teacher(request: ChatRequest):
     try:
-        # MongoDB에서 세션 데이터 조회
-        doc = collection.find_one({"session_id": request.session_id}, {"_id": 0, "results": 1})
+        # MongoDB에서 세션 데이터 조회 (리포트 포함)
+        doc = collection.find_one(
+            {"session_id": request.session_id}, 
+            {"_id": 0, "results": 1, "final_report_html": 1}
+        )
         
         if not doc:
             return {"success": False, "response": "세션 데이터를 찾을 수 없습니다."}
         
         results = doc.get("results", [])
+        final_report = doc.get("final_report_html", "") # 최종 리포트 추출
         
         # RAG Pipeline 사용
         ai_response = llm_pipeline.generate_chat_response(
             user_message=request.message,
             user_name=request.user_name,
             topic=request.topic,
-            analysis_results=results
+            analysis_results=results,
+            final_report=final_report # 최종 리포트 전달
         )
         
         return {"success": True, "response": ai_response}

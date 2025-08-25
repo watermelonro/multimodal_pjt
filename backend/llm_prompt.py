@@ -188,16 +188,5 @@ class LLMPipeline:
             })
             return response
         except Exception as e:
+            logger.error(f"채팅 응답 생성 중 오류: {e}")
             return "답변 생성 중 오류가 발생했습니다. 다시 질문해주세요."
-
-    def _get_personalization_hint(self, analysis_results, user_name):
-        """질문과 관련된 개인화 힌트 생성"""
-        if not analysis_results:
-            return "개인화 정보 없음"
-        
-        # 집중도가 낮았던 구간이 많다면
-        low_focus_count = sum(1 for r in analysis_results if r.get('result', {}).get('str') == '낮음')
-        if low_focus_count > len(analysis_results) * 0.3:
-            return f"{user_name}님이 이전 학습에서 일부 어려움을 겪었던 부분과 관련될 수 있음"
-        
-        return "전반적으로 잘 이해하고 있는 학습자"
