@@ -5,6 +5,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.schema.output_parser import StrOutputParser
 from rag import RAGPipeline
 import logging
+from bs4 import BeautifulSoup
 
 # --- 로깅 설정 ---
 logging.basicConfig(
@@ -173,12 +174,17 @@ class LLMPipeline:
         chat_prompt = ChatPromptTemplate.from_template(chat_template)
         chat_chain = chat_prompt | self.llm | StrOutputParser()
         
+        # HTML에서 텍스트만 추출하고, 길이를 제한
+        soup = BeautifulSoup(final_report, 'html.parser')
+        report_text = soup.get_text(separator='\n', strip=True)
+        truncated_report = (report_text[:8000] + '...') if len(report_text) > 8000 else report_text
+
         try:
             response = chat_chain.invoke({
                 "user_name": user_name,
                 "topic": topic,
                 "user_message": user_message,
-                "final_report": final_report, # 수정: 최종 리포트 추가
+                "final_report": truncated_report, # 수정: 텍스트만 추출한 리포트
                 "rag_result": rag_text
             })
             return response

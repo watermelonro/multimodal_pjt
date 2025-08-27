@@ -10,6 +10,7 @@ from typing import Dict, Any
 from queue import Queue
 import queue
 import threading
+import time
 from pydantic import BaseModel
 import openai 
 
@@ -31,7 +32,6 @@ from data_process import analyze_concentration_changes
 from wav_process import FastAudioPreprocessor, preprocess_audio_data
 from merge_wav import merge_wav_chunks_from_buffer as merge
 from llm_prompt import LLMPipeline
-
 # --- 로깅 설정 ---
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -59,7 +59,9 @@ collection = db["sessions"]
 
 audio_conf = {
     'num_mel_bins': 128, 
-    'target_length': 1024,
+    'target_length': 1024, 
+    'freqm': 48, 
+    'timem': 192,  
     'dataset': 'aihub_audio_dataset', 
     'mean':-4.2677393, 
     'std':4.5689974
@@ -142,32 +144,6 @@ class LectureAnalyzer:
             logger.error(f"Whisper API 호출 중 오류 발생: {e}")
             return "음성 인식 중 오류가 발생했습니다."
 
-    def process_chunk(
-        self, frame_data: bytes, audio_path: str, last_timestamp: float
-    ) -> Dict | None:
-        """실시간 데이터 청크를 받아 멀티모달 모델로 분석"""
-        try:
-            pil_image = Image.open(io.BytesIO(frame_data))
-            pil_image.save("output.jpg")
-            audio_tensor = preprocess_audio_data(self.pad, audio_path)
-            ((pred_num, pred_str), (yaw, pitch), (noise_num, noise_str)), audio = (
-                model_inference.run(
-                    self.face_box_model, self.e2e_model, pil_image, audio_tensor
-                )
-            )
-            transcribed_text = self._transcribe_audio(audio_path)
-            start_time = last_timestamp - config.TIMESTEP
-            result = {
-                "timestamp": {"start": start_time, "end": last_timestamp},
-                "result": {"num": pred_num, "str": pred_str},
-                "pose": {"yaw": float(yaw), "pitch": float(pitch)},
-                "noise": {"num": noise_num, "str": noise_str},
-                "text": transcribed_text,
-            }
-            return result
-        except Exception as e:
-            logger.error(f"실시간 처리 중 오류 발생: {e}", exc_info=True)
-            return None
 
     def generate_final_report(self, session_data: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         """세션 종료 시 종합 리포트 생성"""
@@ -218,39 +194,7 @@ except RuntimeError as e:
     logger.critical(f"분석기 인스턴스 생성 실패. 서버를 종료합니다. 오류: {e}")
     analyzer = None
 
-# class SessionAudioBuffer:
-#     def __init__(self, session_id: str, analyzer):
-#         self.session_id = session_id
-#         self.analyzer = analyzer
-#         self.num_chunks = 0
-#         self._shutdown = False
-#         self.buffer = b''
-#         self.frame_latest = None
-#         self.model_queue = Queue()
-#         self.model_thread = threading.Thread(target=self._model_worker)
-#         self.model_thread.start()
 
-#     def _model_worker(self):
-#         """모델 추론 전용 워커 스레드. 큐에 들어온 작업을 순차적으로 처리합니다."""
-#         while True:
-#             task = self.model_queue.get()
-#             if task is None:  # 종료 신호
-#                 self.model_queue.task_done()
-#                 break
-            
-#             wav_path = ""
-#             try:
-#                 wav_path = self._save_wav_file(task)
-#                 result = self.analyzer.process_chunk(
-#                     task['frame'], wav_path, task['timestamp']
-#                 )
-#                 if result:
-#                     save_result(self.session_id, result)
-#             except Exception as e:
-#                 logger.error(f"모델 워커 처리 중 오류 발생 (Session {self.session_id}): {e}", exc_info=True)
-#             finally:
-#                 self._cleanup_wav_file(wav_path)
-#                 self.model_queue.task_done()
 class SessionAudioBuffer:
     def __init__(self, session_id: str, analyzer):
         self.session_id = session_id
@@ -345,16 +289,16 @@ class SessionAudioBuffer:
             pil_image = Image.open(io.BytesIO(frame_data))
             pil_image.save("output.jpg")
             audio_tensor = preprocess_audio_data(self.analyzer.pad, audio_path)
-            ((pred_num, pred_str), (yaw, pitch), (noise_num, noise_str)), audio = (
-                model_inference.run(
-                    self.analyzer.face_box_model, 
-                    self.analyzer.e2e_model, 
-                    pil_image, 
-                    audio_tensor
-                )
+
+            result = model_inference.run(
+                self.analyzer.face_box_model, 
+                self.analyzer.e2e_model, 
+                pil_image, 
+                audio_tensor
             )
             
-            # 비동기 STT 처리 - 핵심!
+            (pred_num, pred_str), (yaw, pitch), (noise_num, noise_str) = result[0]
+            # 비동기 STT 처리 
             transcribed_text = await self._async_whisper_call(audio_path)
             
             start_time = timestamp - config.TIMESTEP
@@ -582,9 +526,6 @@ async def chat_with_teacher(request: ChatRequest):
         logger.error(f"채팅 API 오류: {e}")
         return {"success": False, "response": "답변 생성 중 오류가 발생했습니다."}
 
-@app.get("/health")
-def health_check():
-    return {"status": "healthy" if analyzer else "unhealthy"}
 
 if __name__ == "__main__":
     import uvicorn

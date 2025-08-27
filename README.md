@@ -37,6 +37,9 @@
 ├── data/            # 데이터 (PDF, 벡터 스토어 등)
 └── requirements.txt # Python 라이브러리 종속성
 └── .env # API 키 등 저장
+└── warmup_files #250825 새롭게 추가 
+    ├── temp_audio.wav
+    ├── temp_image.jpg
 ```
 
 ## 설치 및 실행 방법

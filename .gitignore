@@ -41,3 +41,6 @@ warmup_files/
 *.jpg
 *.ipynb
 *.html
+
+# Files
+data/raw_pdfs
