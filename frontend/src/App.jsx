@@ -142,7 +142,7 @@ const StudentView = () => {
   const [messages, setMessages] = useState([]);
   const socketRef = useRef(null);
   const [sessionId, setSessionId] = useState(null);
-  const [realtimeFeedback, setRealtimeFeedback] = useState({ concentration: 'N/A', noise: 'N/A' });
+  const [realtimeFeedback, setRealtimeFeedback] = useState({ concentration: 'N/A', noise: 'N/A', start_time: '0', end_time: '0' });
   const [finalReport, setFinalReport] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState(null);
@@ -226,6 +226,7 @@ const StudentView = () => {
           mediaStreamRef.current = stream;
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
+            videoRef.current.style.transform = 'scaleX(-1)';
           }
         })
         .catch(err => {
@@ -452,6 +453,7 @@ const StudentView = () => {
             <video ref={videoRef} autoPlay muted className="w-full bg-black aspect-video rounded-lg mb-6 transform -scale-x-100"></video>
             {isStreaming && 
                 <div className="absolute bottom-4 left-4 bg-gray-900 bg-opacity-75 text-white text-base p-4 rounded-xl shadow-lg">
+                    <p className="font-bold">집중도 체크 시간: <span className="font-normal">{realtimeFeedback.start_time}초 ~ {realtimeFeedback.end_time}초</span></p>
                     <p className="font-bold">실시간 집중도: <span className="font-normal">{realtimeFeedback.concentration}</span></p>
                     <p className="font-bold">주변 소음: <span className="font-normal">{realtimeFeedback.noise}</span></p>
                 </div>

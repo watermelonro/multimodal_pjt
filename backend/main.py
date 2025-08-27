@@ -133,7 +133,8 @@ class LectureAnalyzer:
             with open(audio_path, "rb") as audio_file:
                 transcription = self.openai_client.audio.transcriptions.create(
                     model="whisper-1", 
-                    file=audio_file
+                    file=audio_file,
+                    prompt="강의내용을 텍스트로 변환하세요. 강의소리가 없으면 '무음'이라고 해주세요"
                 )
             logger.info(f"Whisper 변환 완료: {transcription.text}")
             return transcription.text
@@ -378,7 +379,8 @@ class SessionAudioBuffer:
                     transcription = self.analyzer.openai_client.audio.transcriptions.create(
                         model="whisper-1", 
                         file=audio_file,
-                        timeout=10
+                        timeout=10,
+                        prompt="강의내용을 텍스트로 변환하세요. 강의소리가 없으면 '무음'이라고 해주세요"
                     )
                 return transcription.text
             except Exception as e:
@@ -503,6 +505,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                     "type": "realtime_feedback",
                                     "concentration": results[-1]['result']['str'],
                                     "noise": results[-1]['noise']['str'],
+                                    "start_time": str(int(results[-1]['timestamp']['end']) - int(session_buffers[session_id].batch_size)*10),
+                                    "end_time": str(int(results[-1]['timestamp']['end']))
                                 })
                     # # --- 실시간 피드백 전송 로직 ---
                     # session = session_manager.get_session(session_id)
